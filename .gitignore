@@ -1,0 +1,25 @@
+# Maven
+target/
+pom.xml.tag
+pom.xml.releaseBackup
+pom.xml.versionsBackup
+release.properties
+
+# IDEs
+.idea/
+*.iml
+.vscode/
+
+# Local configuration and secrets
+.env
+application-local.yml
+
+# Runtime data
+data/
+logs/
+*.db
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db

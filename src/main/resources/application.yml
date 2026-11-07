@@ -1,0 +1,52 @@
+spring:
+  application:
+    name: currency-analyzer-java
+  datasource:
+    url: ${DATABASE_URL:jdbc:postgresql://localhost:5433/currency_analyzer}
+    username: ${DATABASE_USERNAME:currency}
+    password: ${DATABASE_PASSWORD:currency}
+    hikari:
+      maximum-pool-size: ${DATABASE_POOL_SIZE:10}
+      minimum-idle: 1
+      connection-timeout: 10000
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+  web:
+    resources:
+      cache:
+        period: 0
+
+server:
+  port: ${PORT:5000}
+  shutdown: graceful
+  servlet:
+    session:
+      timeout: 7d
+      cookie:
+        http-only: true
+        same-site: lax
+        secure: ${SESSION_COOKIE_SECURE:false}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: never
+  prometheus:
+    metrics:
+      export:
+        enabled: true
+  metrics:
+    tags:
+      application: ${spring.application.name}
+
+logging:
+  level:
+    root: INFO
+    com.currencyanalyzer: INFO

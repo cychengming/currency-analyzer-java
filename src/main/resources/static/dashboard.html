@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Currency Market Analyzer - Dashboard</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.9.1/chart.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-chart-financial@0.2.1/dist/chartjs-chart-financial.min.js"></script>
+    <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+    <div class="dashboard" id="dashboard">
+        <div class="header">
+            <div class="header-brand">
+                <h1>Currency Market Analyzer</h1>
+                <p class="header-subtitle">Track markets, review alerts, run backtests, and manage forecasts from one dark, low-noise workspace.</p>
+            </div>
+            <div class="header-controls">
+                <div class="user-info" id="userInfo">Logged in as: —</div>
+                <div class="status-indicator">
+                    <div class="status-dot" id="statusDot"></div>
+                    <span id="statusText">Monitoring Inactive</span>
+                </div>
+                <button class="btn-success" id="startBtn" onclick="startMonitoring()">Start Monitoring</button>
+                <button class="btn-danger" id="stopBtn" onclick="stopMonitoring()" style="display:none;">Stop Monitoring</button>
+                <button class="btn-secondary" id="refreshDashboardBtn" onclick="refreshDashboardNow()">Refresh Data</button>
+                <button class="btn-danger" onclick="handleLogout()">Logout</button>
+            </div>
+        </div>
+
+        <div class="nav-tabs">
+            <button class="nav-tab active" data-page="overview" onclick="switchPage('overview', event)">Overview</button>
+            <button class="nav-tab" data-page="alerts" onclick="switchPage('alerts', event)">Alert History</button>
+            <button class="nav-tab" data-page="manage" onclick="switchPage('manage', event)">Manage Alerts</button>
+            <button class="nav-tab" data-page="backtest" onclick="switchPage('backtest', event)">Backtest</button>
+            <button class="nav-tab" data-page="trade" onclick="switchPage('trade', event); initTradePage();">Trade</button>
+            <button class="nav-tab" data-page="forecast" onclick="switchPage('forecast', event); loadLatestForecast();">Forecast</button>
+            <button class="nav-tab" data-page="deepLearning" onclick="switchPage('deepLearning', event)">Deep Learning</button>
+            <button class="nav-tab" data-page="settings" onclick="switchPage('settings', event)">Settings</button>
+        </div>
+
+        <div id="pagesContainer"></div>
+    </div>
+
+    <div class="toast" id="toast"></div>
+
+    <script src="/static/utils.js?v=20260310"></script>
+    <script src="/static/auth.js?v=20260310"></script>
+    <script src="/static/dashboard.js?v=20260310"></script>
+    <script src="/static/pages/overview.js?v=20260310"></script>
+    <script src="/static/pages/alerts.js?v=20260310"></script>
+    <script src="/static/pages/manage.js?v=20260310"></script>
+    <script src="/static/pages/trade.js?v=20260310"></script>
+    <script src="/static/pages/forecast.js?v=20260310"></script>
+    <script src="/static/pages/deep_learning.js?v=20260310"></script>
+    <script src="/static/pages/settings.js?v=20260310"></script>
+</body>
+</html>
