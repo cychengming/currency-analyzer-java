@@ -19,6 +19,8 @@ Phase 2 - PostgreSQL, authentication, and legacy import
 - Copied the existing static frontend and preserved `/static/...` paths.
 - Added a transactional, read-only SQLite importer for all current application tables.
 - Added six automated tests covering context loading, password compatibility, authentication, CSRF/static access, and SQLite import.
+- Added JaCoCo line and branch coverage generation.
+- Added SonarQube Cloud project configuration and a guarded GitHub Actions scan.
 
 ## Next
 

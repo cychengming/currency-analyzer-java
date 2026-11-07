@@ -13,6 +13,7 @@ The application is being migrated from the existing Flask implementation while p
 - CSRF-aware shared frontend request helper
 - SQLite-to-PostgreSQL importer
 - Actuator health and Prometheus metrics
+- JaCoCo coverage and SonarQube Cloud analysis
 - Maven Wrapper, Docker, Compose, and GitHub Actions CI
 
 ## Build and test
@@ -23,6 +24,17 @@ $env:JAVA_HOME = 'D:\Program Files\Java\jdk-25.0.4.1'
 ```
 
 The tests use an H2 PostgreSQL-compatibility database. Docker is required only for the real PostgreSQL deployment and future Testcontainers coverage.
+
+The `verify` phase writes JaCoCo coverage reports to `target/site/jacoco`.
+
+## Enable SonarQube Cloud
+
+1. Create or import the `cychengming_currency-analyzer-java` project in SonarQube Cloud.
+2. Generate a project analysis token.
+3. Add it to the GitHub repository as the Actions secret `SONAR_TOKEN`.
+4. Run the Java CI workflow.
+
+Until the secret is configured, GitHub Actions emits a warning and skips the Sonar scan without failing the build. Once configured, the scan waits for the Sonar quality gate.
 
 ## Run with Docker
 
