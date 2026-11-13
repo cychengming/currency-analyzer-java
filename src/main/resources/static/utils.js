@@ -121,6 +121,17 @@ async function fetchAPI(endpoint, options = {}) {
             return null;
         }
 
+        if (!response.ok) {
+            console.error(`API Error: ${response.status} ${response.statusText} for ${endpoint}`);
+            return null;
+        }
+
+        const contentType = response.headers.get('content-type') || '';
+        if (!contentType.includes('application/json')) {
+            console.error(`Unexpected response content type for ${endpoint}: ${contentType}`);
+            return null;
+        }
+
         return await response.json();
     } catch (error) {
         console.error('API Error:', error);

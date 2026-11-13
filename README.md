@@ -61,3 +61,4 @@ The importer opens SQLite read-only, copies all application tables in one target
 
 - [Migration plan](docs/JAVA_REFACTOR_PLAN.md)
 - [Implementation status](docs/IMPLEMENTATION_STATUS.md)
+- [AI assistant design and estimate](docs/AI_ASSISTANT_MODULE.md)

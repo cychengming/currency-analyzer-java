@@ -25,6 +25,17 @@ async function fetchAPI(endpoint, options = {}) {
             return null;
         }
 
+        if (!response.ok) {
+            console.error(`API Error: ${response.status} ${response.statusText} for ${endpoint}`);
+            return null;
+        }
+
+        const contentType = response.headers.get('content-type') || '';
+        if (!contentType.includes('application/json')) {
+            console.error(`Unexpected response content type for ${endpoint}: ${contentType}`);
+            return null;
+        }
+
         return await response.json();
     } catch (error) {
         console.error('API Error:', error);
@@ -199,8 +210,11 @@ function updateTradeDiaryGuidance() {
 function restoreDashboardState() {
     const state = readDashboardState();
 
-    if (typeof state.selectedPair === 'string' && state.selectedPair.trim()) {
-        selectedPair = state.selectedPair;
+    if (typeof state.selectedPair === 'string') {
+        const storedPair = state.selectedPair.trim().toUpperCase();
+        if (/^[A-Z0-9]+\/[A-Z]{3}$/.test(storedPair)) {
+            selectedPair = storedPair;
+        }
     }
 
     if (['days', 'weeks', 'months'].includes(state.timeframeUnit)) {
@@ -865,12 +879,14 @@ async function refreshData() {
     updateWorkspaceSummary({ message: 'Refreshing market data...', tone: 'info' });
 
     try {
-        const results = await Promise.allSettled([
-            fetchLiveRates(),
+        // Load quotes first so a stale/invalid saved pair is replaced before chart loading.
+        const liveResult = await Promise.allSettled([fetchLiveRates()]);
+        const remainingResults = await Promise.allSettled([
             fetchHistoricalData(),
             fetchAlerts(),
             updateMonitoringStatus()
         ]);
+        const results = [...liveResult, ...remainingResults];
 
         renderRates();
 
@@ -939,15 +955,35 @@ function populateAssetSelectors() {
 async function fetchLiveRates() {
     const rates = await fetchAPI('/api/live-rates');
 
-    if (!rates || typeof rates !== 'object' || Array.isArray(rates)) {
+    if (!rates || typeof rates !== 'object' || Array.isArray(rates) || rates.success === false) {
         liveRates = {};
         window.liveRates = liveRates;
         updateWorkspaceSummary({ message: 'Live rates unavailable', tone: 'warning' });
         return;
     }
 
-    liveRates = rates;
+    liveRates = Object.fromEntries(
+        Object.entries(rates).filter(([pair, quote]) =>
+            /^[A-Z0-9]+\/[A-Z]{3}$/.test(pair) &&
+            quote &&
+            Number.isFinite(Number(quote.rate)) &&
+            Number.isFinite(Number(quote.change)) &&
+            Number.isFinite(Number(quote.changePercent))
+        ).map(([pair, quote]) => [
+            pair,
+            {
+                rate: Number(quote.rate),
+                change: Number(quote.change),
+                changePercent: Number(quote.changePercent)
+            }
+        ])
+    );
     window.liveRates = liveRates;
+
+    if (Object.keys(liveRates).length === 0) {
+        updateWorkspaceSummary({ message: 'Live rates unavailable', tone: 'warning' });
+        return;
+    }
 
     if (!liveRates[selectedPair]) {
         const fallbackPair = Object.keys(liveRates)[0];
@@ -1602,7 +1638,7 @@ async function fetchHistoricalData() {
             return;
         }
 
-        const data = await fetchAPI(`/api/historical/${encodedPair}/${days}`);
+        const data = await fetchAPI(`/api/historical?pair=${encodedPair}&days=${days}`);
 
         if (!data) {
             showChartError('Failed to fetch historical data');

@@ -7,6 +7,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 import java.util.Map;
 
@@ -24,6 +25,18 @@ public class ApiExceptionHandler {
         return ResponseEntity.badRequest().body(Map.of(
             "success", false,
             "error", exception.getMessage() == null ? "Invalid request" : exception.getMessage()
+        ));
+    }
+
+    @ExceptionHandler(NoResourceFoundException.class)
+    public ResponseEntity<Map<String, Object>> notFound(
+        NoResourceFoundException exception,
+        HttpServletRequest request
+    ) {
+        log.debug("No handler for {}", request.getRequestURI());
+        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of(
+            "success", false,
+            "error", "Not found"
         ));
     }
 

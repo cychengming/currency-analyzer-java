@@ -48,6 +48,10 @@ management:
     tags:
       application: ${spring.application.name}
 
+app:
+  market:
+    pairs: ${MARKET_PAIRS:}
+
 logging:
   level:
     root: INFO
