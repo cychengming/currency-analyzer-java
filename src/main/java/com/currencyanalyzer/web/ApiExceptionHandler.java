@@ -1,5 +1,6 @@
 package com.currencyanalyzer.web;
 
+import com.currencyanalyzer.ai.chat.AiResponseInProgressException;
 import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -15,6 +16,16 @@ import java.util.Map;
 public class ApiExceptionHandler {
 
     private static final Logger log = LoggerFactory.getLogger(ApiExceptionHandler.class);
+
+    @ExceptionHandler(AiResponseInProgressException.class)
+    public ResponseEntity<Map<String, Object>> responseInProgress(
+        AiResponseInProgressException exception
+    ) {
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of(
+            "success", false,
+            "error", exception.getMessage()
+        ));
+    }
 
     @ExceptionHandler(IllegalArgumentException.class)
     public ResponseEntity<Map<String, Object>> badRequest(

@@ -24,6 +24,7 @@
                 <button class="btn-success" id="startBtn" onclick="startMonitoring()">Start Monitoring</button>
                 <button class="btn-danger" id="stopBtn" onclick="stopMonitoring()" style="display:none;">Stop Monitoring</button>
                 <button class="btn-secondary" id="refreshDashboardBtn" onclick="refreshDashboardNow()">Refresh Data</button>
+                <button class="btn-secondary" id="aiChatOpenButton" type="button" aria-controls="aiChatPanel" aria-expanded="false" hidden>Ask Currency Analyzer</button>
                 <button class="btn-danger" onclick="handleLogout()">Logout</button>
             </div>
         </div>
@@ -42,6 +43,33 @@
         <div id="pagesContainer"></div>
     </div>
 
+    <aside class="ai-chat-panel" id="aiChatPanel" aria-label="Ask Currency Analyzer" hidden>
+        <div class="ai-chat-header">
+            <div>
+                <h2>Ask Currency Analyzer</h2>
+                <p>Educational information, not investment advice.</p>
+            </div>
+            <button type="button" class="btn-secondary" id="aiChatCloseButton" aria-label="Close assistant">Close</button>
+        </div>
+        <div class="ai-chat-toolbar">
+            <select id="aiConversationSelect" aria-label="Conversation"></select>
+            <button type="button" class="btn-secondary" id="aiNewConversationButton">New chat</button>
+        </div>
+        <div class="ai-chat-messages" id="aiChatMessages" aria-live="polite"></div>
+        <div class="ai-chat-error" id="aiChatError" role="status" hidden></div>
+        <form class="ai-chat-form" id="aiChatForm">
+            <label class="sr-only" for="aiChatInput">Message</label>
+            <textarea id="aiChatInput" maxlength="8000" rows="3" placeholder="Ask a question..." required></textarea>
+            <div class="ai-chat-form-actions">
+                <span>Market values are not live-verified in chat yet.</span>
+                <div>
+                    <button type="button" class="btn-secondary" id="aiChatStopButton" hidden>Stop</button>
+                    <button type="submit" class="btn-primary" id="aiChatSendButton">Send</button>
+                </div>
+            </div>
+        </form>
+    </aside>
+
     <div class="toast" id="toast"></div>
 
     <script src="/static/utils.js?v=20261113"></script>
@@ -54,5 +82,6 @@
     <script src="/static/pages/forecast.js?v=20261113"></script>
     <script src="/static/pages/deep_learning.js?v=20261113"></script>
     <script src="/static/pages/settings.js?v=20261113"></script>
+    <script src="/static/ai-chat.js?v=20261113"></script>
 </body>
 </html>

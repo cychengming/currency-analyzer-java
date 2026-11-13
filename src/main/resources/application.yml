@@ -49,6 +49,16 @@ management:
       application: ${spring.application.name}
 
 app:
+  ai:
+    enabled: ${AI_ASSISTANT_ENABLED:false}
+    provider: deepseek
+    model: ${DEEPSEEK_MODEL:deepseek-flash}
+    max-input-chars: ${AI_MAX_INPUT_CHARS:8000}
+    max-output-tokens: ${AI_MAX_OUTPUT_TOKENS:1200}
+    request-timeout-seconds: ${AI_REQUEST_TIMEOUT_SECONDS:60}
+    deepseek:
+      base-url: ${DEEPSEEK_BASE_URL:https://api.deepseek.com}
+      api-key: ${DEEPSEEK_API_KEY:}
   market:
     pairs: ${MARKET_PAIRS:}
 

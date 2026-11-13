@@ -12,6 +12,7 @@ The application is being migrated from the existing Flask implementation while p
 - Existing static frontend copied into `src/main/resources/static`
 - CSRF-aware shared frontend request helper
 - SQLite-to-PostgreSQL importer
+- AI assistant conversation storage and owner-scoped API foundation (disabled by default)
 - Actuator health and Prometheus metrics
 - JaCoCo coverage and SonarQube Cloud analysis
 - Maven Wrapper, Docker, Compose, and GitHub Actions CI
@@ -26,6 +27,18 @@ $env:JAVA_HOME = 'D:\Program Files\Java\jdk-25.0.4.1'
 The tests use an H2 PostgreSQL-compatibility database. Docker is required only for the real PostgreSQL deployment and future Testcontainers coverage.
 
 The `verify` phase writes JaCoCo coverage reports to `target/site/jacoco`.
+
+### AI assistant (early access)
+
+The assistant is disabled unless `AI_ASSISTANT_ENABLED=true` is set. To enable DeepSeek-backed streaming chat, configure the server environment with:
+
+```text
+AI_ASSISTANT_ENABLED=true
+DEEPSEEK_API_KEY=<server-side API key>
+DEEPSEEK_MODEL=deepseek-flash
+```
+
+The API key is never sent to the browser. The current assistant can explain general concepts but does not yet have market-data tools; it must not be used for live prices, alerts, forecasts, or backtest results. Responses are educational and not investment advice. Chat text is stored in PostgreSQL under the owning account.
 
 ## Enable SonarQube Cloud
 

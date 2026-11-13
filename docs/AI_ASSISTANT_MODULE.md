@@ -12,9 +12,9 @@
 
 Add an authenticated **“Ask Currency Analyzer”** assistant to the existing dashboard. The assistant should explain application data, alerts, historical movements, forecasts, and backtest results. It should not place trades, execute arbitrary code, or provide personalized investment advice.
 
-The recommended implementation uses the OpenAI Responses API through a server-side provider abstraction. Official OpenAI documentation describes the Responses API as supporting stateful interactions, built-in tools, and function calling with external systems and data:
+The implementation uses DeepSeek's OpenAI-compatible chat-completions API through a server-side provider abstraction. DeepSeek documents streaming support for this endpoint:
 
-- [Responses API overview](https://developers.openai.com/api/reference/responses/overview)
+- [DeepSeek streaming guide](https://api-docs.deepseek.com/guides/streaming)
 
 The recommended first release is a read-only assistant with:
 
@@ -94,7 +94,7 @@ AI Orchestrator
   - response validation
   - usage accounting
         |
-        +----> OpenAI Responses API
+        +----> DeepSeek Chat Completions API
         |
         +----> Currency Analyzer tool adapters
                  - live market data
@@ -114,10 +114,10 @@ PostgreSQL
 ### Technology choices
 
 - Keep Spring MVC; use a streaming response rather than introducing Spring WebFlux for this feature.
-- Define an internal `AiProvider` interface so the OpenAI implementation is replaceable.
-- Use the current official OpenAI Java SDK or a small `RestClient` adapter, pinned to an exact version.
+- Define an internal `AiProvider` interface so the DeepSeek implementation is replaceable.
+- Use a small server-side HTTP adapter for DeepSeek's OpenAI-compatible streaming API.
 - Prefer typed tool definitions and structured JSON results over free-form context dumps.
-- Keep the OpenAI API key only in server-side environment configuration.
+- Keep the DeepSeek API key only in server-side environment configuration.
 
 ## 6. Proposed Java Module
 
@@ -311,8 +311,9 @@ Proposed environment variables:
 
 ```text
 AI_ASSISTANT_ENABLED=false
-OPENAI_API_KEY=
-OPENAI_MODEL=<configured-model-id>
+DEEPSEEK_API_KEY=
+DEEPSEEK_MODEL=deepseek-flash
+DEEPSEEK_BASE_URL=https://api.deepseek.com
 AI_DAILY_REQUEST_LIMIT=50
 AI_DAILY_TOKEN_LIMIT=50000
 AI_MAX_INPUT_CHARS=8000
@@ -327,7 +328,7 @@ The model identifier should be configuration, not hard-coded in controllers. Sel
 
 - Authenticate every AI endpoint.
 - Enforce conversation ownership on every read and write.
-- Never expose `OPENAI_API_KEY` to the frontend.
+- Never expose `DEEPSEEK_API_KEY` to the frontend.
 - Rate-limit chat requests per username and IP address.
 - Enforce a global request/token budget and emergency kill switch.
 - Reject oversized messages and tool arguments.
@@ -359,7 +360,7 @@ Operational requirements:
 - Support immediate disablement through `AI_ASSISTANT_ENABLED=false`.
 - Display request limits and usage to users.
 
-Exact monetary cost depends on the selected provider, model, and current pricing. It should be calculated through a configurable price table and reviewed against current official pricing before enabling production access.
+Exact monetary cost depends on the selected model and current pricing. It should be calculated through a configurable price table and reviewed against current official pricing before enabling production access.
 
 ## 13. Testing and Evaluation
 
@@ -497,8 +498,8 @@ The first production release is complete when:
 
 Unless changed during review:
 
-1. Use OpenAI as the first provider behind an internal `AiProvider` abstraction.
-2. Keep the model identifier and API key in environment configuration.
+1. Use DeepSeek as the first provider behind an internal `AiProvider` abstraction.
+2. Keep the model identifier and API key in server-side environment configuration.
 3. Use Spring MVC streaming responses rather than WebFlux or WebSockets.
 4. Store application conversation history in PostgreSQL.
 5. Use only read-only tools in the first release.
@@ -508,7 +509,6 @@ Unless changed during review:
 
 ## 19. References
 
-- [OpenAI Responses API overview](https://developers.openai.com/api/reference/responses/overview)
-- [OpenAI function calling guide](https://developers.openai.com/docs/guides/function-calling?api-mode=responses)
-- [OpenAI conversation state guide](https://developers.openai.com/docs/guides/conversation-state?api-mode=responses)
-- [OpenAI tools guide](https://developers.openai.com/docs/guides/tools?api-mode=responses)
+- [DeepSeek API quick start](https://api-docs.deepseek.com/)
+- [DeepSeek streaming guide](https://api-docs.deepseek.com/guides/streaming)
+- [DeepSeek chat completions API](https://api-docs.deepseek.com/api/create-chat-completion)

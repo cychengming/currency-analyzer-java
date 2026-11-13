@@ -32,6 +32,10 @@ class AuthControllerTests {
             .andExpect(jsonPath("$.token").isNotEmpty())
             .andExpect(jsonPath("$.headerName").value("X-XSRF-TOKEN"));
 
+        mockMvc.perform(get("/api/ai/status"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.enabled").value(false));
+
         mockMvc.perform(get("/api/live-rates"))
             .andExpect(status().isUnauthorized())
             .andExpect(jsonPath("$.success").value(false))

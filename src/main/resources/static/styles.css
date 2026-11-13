@@ -982,6 +982,136 @@ textarea[disabled] {
     border-left: 4px solid #ef4444;
 }
 
+.ai-chat-panel {
+    position: fixed;
+    inset: 0 0 0 auto;
+    z-index: 1100;
+    display: flex;
+    flex-direction: column;
+    width: min(440px, 100vw);
+    padding: 18px;
+    background: var(--bg-elevated);
+    border-left: 1px solid var(--border);
+    box-shadow: var(--shadow-lg);
+}
+
+.ai-chat-panel[hidden],
+#aiChatOpenButton[hidden],
+#aiChatStopButton[hidden] {
+    display: none;
+}
+
+.ai-chat-header,
+.ai-chat-toolbar,
+.ai-chat-form-actions {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.ai-chat-header {
+    padding-bottom: 14px;
+    border-bottom: 1px solid var(--border);
+}
+
+.ai-chat-header h2 {
+    font-size: 18px;
+}
+
+.ai-chat-header p,
+.ai-chat-form-actions span {
+    color: var(--text-muted);
+    font-size: 12px;
+}
+
+.ai-chat-toolbar {
+    padding: 12px 0;
+}
+
+.ai-chat-toolbar select {
+    min-width: 0;
+    flex: 1;
+    padding: 9px;
+    color: var(--text);
+    background: var(--bg-soft);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+}
+
+.ai-chat-messages {
+    flex: 1;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+    padding: 12px 2px;
+}
+
+.ai-chat-message {
+    max-width: 92%;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+.ai-chat-message-user {
+    align-self: flex-end;
+    background: var(--accent-soft);
+}
+
+.ai-chat-message-assistant {
+    align-self: flex-start;
+    background: var(--surface);
+}
+
+.ai-chat-error {
+    padding: 10px;
+    color: var(--danger);
+    border: 1px solid var(--danger);
+    border-radius: var(--radius-sm);
+}
+
+.ai-chat-form {
+    border-top: 1px solid var(--border);
+    padding-top: 12px;
+}
+
+.ai-chat-form textarea {
+    width: 100%;
+    resize: vertical;
+    padding: 10px;
+    color: var(--text);
+    background: var(--bg-soft);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    font: inherit;
+}
+
+.ai-chat-form-actions {
+    margin-top: 8px;
+}
+
+.ai-chat-form-actions > div {
+    display: flex;
+    gap: 8px;
+}
+
+.sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+}
+
 @keyframes slideIn {
     from {
         transform: translateX(400px);

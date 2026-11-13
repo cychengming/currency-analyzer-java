@@ -27,6 +27,16 @@ Phase 2 - PostgreSQL, authentication, and legacy import
 - Run the importer against a production-like PostgreSQL instance.
 - Implement settings and alert-preference APIs.
 - Implement market-data providers and historical price storage.
+- Add read-only adapters for the AI assistant after completing the corresponding application services.
+
+## AI assistant progress
+
+- Added Flyway schema for conversations, messages, tool invocations, and usage accounting.
+- Added authenticated, owner-scoped conversation create/list/delete endpoints.
+- Added an `AI_ASSISTANT_ENABLED` kill switch that defaults to disabled.
+- Added DeepSeek streaming chat through its OpenAI-compatible chat-completions API.
+- Added message history, cancellation, safe plain-text dashboard rendering, and an educational/non-investment-advice system prompt.
+- Message streaming and the dashboard drawer are implemented, but quotas, usage accounting, Markdown rendering, and application tool adapters remain pending.
 
 ## Compatibility notes
 

@@ -10,6 +10,7 @@ import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.csrf.CookieCsrfTokenRepository;
+import org.springframework.security.web.csrf.CsrfTokenRequestAttributeHandler;
 import org.springframework.security.web.csrf.CsrfTokenRepository;
 
 import java.io.IOException;
@@ -31,7 +32,8 @@ public class WebSecurityConfig {
         http
             .csrf(csrf -> csrf
                 .ignoringRequestMatchers("/api/auth/register", "/api/auth/login")
-                .csrfTokenRepository(csrfTokenRepository))
+                .csrfTokenRepository(csrfTokenRepository)
+                .csrfTokenRequestHandler(new CsrfTokenRequestAttributeHandler()))
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.IF_REQUIRED))
             .authorizeHttpRequests(authorize -> authorize
                 .dispatcherTypeMatchers(DispatcherType.ERROR).permitAll()
@@ -48,6 +50,7 @@ public class WebSecurityConfig {
                     "/api/auth/login",
                     "/api/auth/status",
                     "/api/auth/csrf",
+                    "/api/ai/status",
                     "/actuator/health",
                     "/actuator/health/**",
                     "/actuator/prometheus",
