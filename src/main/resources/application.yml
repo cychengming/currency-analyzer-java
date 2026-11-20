@@ -61,6 +61,8 @@ app:
       api-key: ${DEEPSEEK_API_KEY:}
   market:
     pairs: ${MARKET_PAIRS:}
+    # Matches the dashboard refresh interval. Concurrent viewers share one upstream fetch.
+    live-cache-ttl-seconds: ${MARKET_LIVE_CACHE_TTL_SECONDS:60}
 
 logging:
   level:
