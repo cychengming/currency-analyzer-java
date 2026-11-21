@@ -120,6 +120,50 @@ class SpringAiChatRunnerTests {
     }
 
     @Test
+    void continuesAnAnswerCutOffByTheOutputLimit() {
+        CutOffThenConclusion model = new CutOffThenConclusion();
+        SpringAiChatRunner runner = new SpringAiChatRunner(provider(model), marketTools(), "deepseek-flash", 8192);
+        List<String> events = new ArrayList<>();
+
+        runner.answer("Be brief.", List.of(new SpringAiChatRunner.PriorMessage("user", "Explain position sizing.", null)),
+            new SpringAiChatRunner.StreamListener() {
+                @Override
+                public void onText(String delta) {
+                    events.add("text:" + delta);
+                }
+
+                @Override
+                public void onReasoning(String delta) {
+                }
+
+                @Override
+                public void onToolStarted(String name) {
+                }
+
+                @Override
+                public void onToolFinished(String name, String argumentsJson, String result, int durationMs) {
+                }
+            },
+            () -> false
+        );
+
+        assertEquals(List.of(8192, 8192), model.maxTokens);
+        assertEquals(List.of(
+            DeepSeekApi.ChatCompletionRequest.Thinking.Type.ENABLED,
+            DeepSeekApi.ChatCompletionRequest.Thinking.Type.DISABLED
+        ), model.thinking);
+        assertEquals("Section a is done. Section b", model.partial);
+        assertEquals(
+            "The answer was cut off. Continue from the exact stopping point and finish the conclusion. Do not repeat the text already written.",
+            model.nudge
+        );
+        assertEquals(
+            List.of("text:Section a is done. Section b", "text: concludes here."),
+            events.stream().filter(event -> event.startsWith("text:")).toList()
+        );
+    }
+
+    @Test
     void reportsAMissingKeyAndKeepsACancelledFailureQuiet() {
         SpringAiChatRunner missing = new SpringAiChatRunner(provider(null), marketTools(), "deepseek-flash", 200);
         AiProviderException missingKey = assertThrows(AiProviderException.class, () ->
@@ -299,6 +343,52 @@ class SpringAiChatRunnerTests {
                 ChatGenerationMetadata.builder().finishReason("STOP").build()
             );
             return Flux.just(new ChatResponse(List.of(generation)));
+        }
+
+        @Override
+        public ChatOptions getDefaultOptions() {
+            return DeepSeekChatOptions.builder().model("deepseek-flash").build();
+        }
+    }
+
+    private static final class CutOffThenConclusion implements ChatModel {
+        private final List<DeepSeekApi.ChatCompletionRequest.Thinking.Type> thinking = new ArrayList<>();
+        private final List<Integer> maxTokens = new ArrayList<>();
+        private String partial;
+        private String nudge;
+        private int calls;
+
+        @Override
+        public ChatResponse call(Prompt prompt) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public Flux<ChatResponse> stream(Prompt prompt) {
+            calls++;
+            DeepSeekChatOptions options = (DeepSeekChatOptions) prompt.getOptions();
+            thinking.add(options.getThinking().type());
+            maxTokens.add(options.getMaxTokens());
+            if (calls == 1) {
+                DeepSeekAssistantMessage message = DeepSeekAssistantMessage.builder()
+                    .content("Section a is done. Section b")
+                    .reasoningContent("The sections still need a conclusion.")
+                    .build();
+                return Flux.just(new ChatResponse(List.of(new Generation(
+                    message,
+                    ChatGenerationMetadata.builder().finishReason("LENGTH").build()
+                ))));
+            }
+            List<Message> instructions = prompt.getInstructions();
+            partial = instructions.get(instructions.size() - 2).getText();
+            nudge = instructions.getLast().getText();
+            DeepSeekAssistantMessage message = DeepSeekAssistantMessage.builder()
+                .content(" concludes here.")
+                .build();
+            return Flux.just(new ChatResponse(List.of(new Generation(
+                message,
+                ChatGenerationMetadata.builder().finishReason("STOP").build()
+            ))));
         }
 
         @Override
