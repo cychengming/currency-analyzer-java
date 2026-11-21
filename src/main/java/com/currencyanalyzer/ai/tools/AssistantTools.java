@@ -1,5 +1,7 @@
 package com.currencyanalyzer.ai.tools;
 
+import com.currencyanalyzer.ai.knowledge.KnowledgeNote;
+import com.currencyanalyzer.ai.knowledge.KnowledgeRetriever;
 import com.currencyanalyzer.ai.provider.AiProvider.ToolDefinition;
 import com.currencyanalyzer.marketdata.HistoricalPoint;
 import com.currencyanalyzer.marketdata.LiveRate;
@@ -24,60 +26,92 @@ import java.util.Map;
 @Component
 public class AssistantTools {
 
+    public static final String GET_LIVE_RATES = "get_live_rates";
+    public static final String GET_HISTORICAL_SERIES = "get_historical_series";
+    public static final String COMPARE_PAIRS = "compare_pairs";
+    public static final String GET_ALERT_HISTORY = "get_alert_history";
+    public static final String GET_ALERT_PREFERENCES = "get_alert_preferences";
+    public static final String GET_MONITORING_STATE = "get_monitoring_state";
+    public static final String GET_SETTINGS = "get_settings";
+    public static final String GET_LATEST_FORECAST = "get_latest_forecast";
+    public static final String SEARCH_NOTES = "search_notes";
+
+    public static final String GET_LIVE_RATES_DESCRIPTION =
+        "Read the current dashboard quotes for the configured pairs. Values come from the application's cached feed.";
+    public static final String GET_HISTORICAL_SERIES_DESCRIPTION =
+        "Read daily closes for one pair. Days must be from 1 to 365. The result includes the change over that window and a sampled series.";
+    public static final String COMPARE_PAIRS_DESCRIPTION =
+        "Compare the change over the same daily window for two pairs. Days must be from 1 to 365.";
+    public static final String GET_ALERT_HISTORY_DESCRIPTION =
+        "Read alerts this application has already recorded. Omit pair to read the latest alerts across pairs.";
+    public static final String GET_ALERT_PREFERENCES_DESCRIPTION =
+        "Read the saved alert rules. Omit pair to list the rules for every pair.";
+    public static final String GET_MONITORING_STATE_DESCRIPTION =
+        "Read the last time each pair raised an alert. Omit pair to list every monitored pair.";
+    public static final String GET_SETTINGS_DESCRIPTION =
+        "Read stored application settings. Passwords, tokens, and API keys are omitted.";
+    public static final String GET_LATEST_FORECAST_DESCRIPTION =
+        "Read the newest stored model forecast. This is a saved path, not a live price and not a promise of a future price.";
+    public static final String SEARCH_NOTES_DESCRIPTION =
+        "Search the investment notes by meaning. Use this for a method, a risk rule, or an investor.";
+
     static final int MAX_HISTORY_DAYS = 365;
     static final int MAX_SERIES_POINTS = 40;
     static final int MAX_ALERTS = 20;
     static final int MAX_FORECAST_POINTS = 40;
     private static final int MAX_RESULT_CHARS = 6000;
+    private static final int MAX_SETTINGS = 40;
 
     private final MarketDataService marketDataService;
     private final JdbcTemplate jdbcTemplate;
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final Clock clock;
     private final long liveRateMaxAgeSeconds;
+    private final KnowledgeRetriever knowledgeRetriever;
 
     public AssistantTools(
         MarketDataService marketDataService,
         JdbcTemplate jdbcTemplate,
         Clock clock,
-        @Value("${app.market.live-cache-ttl-seconds:60}") long liveRateMaxAgeSeconds
+        @Value("${app.market.live-cache-ttl-seconds:60}") long liveRateMaxAgeSeconds,
+        KnowledgeRetriever knowledgeRetriever
     ) {
         this.marketDataService = marketDataService;
         this.jdbcTemplate = jdbcTemplate;
         this.clock = clock;
         this.liveRateMaxAgeSeconds = liveRateMaxAgeSeconds;
+        this.knowledgeRetriever = knowledgeRetriever;
     }
 
     public List<ToolDefinition> definitions() {
         return List.of(
-            new ToolDefinition(
-                "get_live_rates",
-                "Read the current dashboard quotes for the configured pairs. Values come from the application's cached feed.",
-                schema(Map.of(), List.of())
-            ),
-            new ToolDefinition(
-                "get_historical_series",
-                "Read daily closes for one pair. Days must be from 1 to 365. The result includes the change over that window and a sampled series.",
-                schema(Map.of(
-                    "pair", stringProp("Pair such as EUR/USD or GOLD/USD"),
-                    "days", integerProp("Number of recent daily closes", 1, MAX_HISTORY_DAYS)
-                ), List.of("pair", "days"))
-            ),
-            new ToolDefinition(
-                "get_alert_history",
-                "Read alerts this application has already recorded. Omit pair to read the latest alerts across pairs.",
-                schema(Map.of(
-                    "pair", stringProp("Optional pair filter, such as EUR/USD"),
-                    "limit", integerProp("Maximum alerts to return", 1, MAX_ALERTS)
-                ), List.of())
-            ),
-            new ToolDefinition(
-                "get_latest_forecast",
-                "Read the newest stored model forecast. This is a saved path, not a live price and not a promise of a future price.",
-                schema(Map.of(
-                    "asset", stringProp("Optional asset, such as EUR/USD or GOLD/USD. Omit it to read the newest run.")
-                ), List.of())
-            )
+            new ToolDefinition(GET_LIVE_RATES, GET_LIVE_RATES_DESCRIPTION, schema(Map.of(), List.of())),
+            new ToolDefinition(GET_HISTORICAL_SERIES, GET_HISTORICAL_SERIES_DESCRIPTION, schema(Map.of(
+                "pair", stringProp("Pair such as EUR/USD or GOLD/USD"),
+                "days", integerProp("Number of recent daily closes", 1, MAX_HISTORY_DAYS)
+            ), List.of("pair", "days"))),
+            new ToolDefinition(COMPARE_PAIRS, COMPARE_PAIRS_DESCRIPTION, schema(Map.of(
+                "first", stringProp("First pair, such as EUR/USD"),
+                "second", stringProp("Second pair, such as GBP/USD"),
+                "days", integerProp("Number of recent daily closes", 1, MAX_HISTORY_DAYS)
+            ), List.of("first", "second", "days"))),
+            new ToolDefinition(GET_ALERT_HISTORY, GET_ALERT_HISTORY_DESCRIPTION, schema(Map.of(
+                "pair", stringProp("Optional pair filter, such as EUR/USD"),
+                "limit", integerProp("Maximum alerts to return", 1, MAX_ALERTS)
+            ), List.of())),
+            new ToolDefinition(GET_ALERT_PREFERENCES, GET_ALERT_PREFERENCES_DESCRIPTION, schema(Map.of(
+                "pair", stringProp("Optional pair filter, such as EUR/USD")
+            ), List.of())),
+            new ToolDefinition(GET_MONITORING_STATE, GET_MONITORING_STATE_DESCRIPTION, schema(Map.of(
+                "pair", stringProp("Optional pair filter, such as EUR/USD")
+            ), List.of())),
+            new ToolDefinition(GET_SETTINGS, GET_SETTINGS_DESCRIPTION, schema(Map.of(), List.of())),
+            new ToolDefinition(GET_LATEST_FORECAST, GET_LATEST_FORECAST_DESCRIPTION, schema(Map.of(
+                "asset", stringProp("Optional asset, such as EUR/USD or GOLD/USD. Omit it to read the newest run.")
+            ), List.of())),
+            new ToolDefinition(SEARCH_NOTES, SEARCH_NOTES_DESCRIPTION, schema(Map.of(
+                "query", stringProp("What the note should be about, in the user's own words")
+            ), List.of("query")))
         );
     }
 
@@ -85,10 +119,15 @@ public class AssistantTools {
         try {
             JsonNode arguments = parseArguments(argumentsJson);
             String result = switch (name == null ? "" : name) {
-                case "get_live_rates" -> liveRates();
-                case "get_historical_series" -> historicalSeries(arguments);
-                case "get_alert_history" -> alertHistory(arguments);
-                case "get_latest_forecast" -> latestForecast(arguments);
+                case GET_LIVE_RATES -> liveRates();
+                case GET_HISTORICAL_SERIES -> historicalSeries(arguments);
+                case COMPARE_PAIRS -> comparePairs(arguments);
+                case GET_ALERT_HISTORY -> alertHistory(arguments);
+                case GET_ALERT_PREFERENCES -> alertPreferences(arguments);
+                case GET_MONITORING_STATE -> monitoringState(arguments);
+                case GET_SETTINGS -> settings();
+                case GET_LATEST_FORECAST -> latestForecast(arguments);
+                case SEARCH_NOTES -> searchNotes(arguments);
                 default -> error("Unknown tool");
             };
             return limit(result);
@@ -114,14 +153,34 @@ public class AssistantTools {
     }
 
     private String historicalSeries(JsonNode arguments) {
-        String pair = requiredPair(arguments);
+        return write(historicalBody(requiredPair(arguments), arguments.path("days").asInt(0)));
+    }
+
+    private String comparePairs(JsonNode arguments) {
+        String first = requiredSymbol(arguments, "first");
+        String second = requiredSymbol(arguments, "second");
+        if (first.equals(second)) {
+            throw new IllegalArgumentException("Compare two different pairs");
+        }
         int days = arguments.path("days").asInt(0);
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("days", days);
+        body.put("first", historicalBody(first, days));
+        body.put("second", historicalBody(second, days));
+        return write(body);
+    }
+
+    private Map<String, Object> historicalBody(String pair, int days) {
         if (days < 1 || days > MAX_HISTORY_DAYS) {
             throw new IllegalArgumentException("days must be between 1 and " + MAX_HISTORY_DAYS);
         }
         List<HistoricalPoint> points = marketDataService.fetchHistorical(pair, days);
         if (points.isEmpty()) {
-            return write(Map.of("available", false, "pair", pair, "reason", "No daily closes were returned."));
+            return new LinkedHashMap<>(Map.of(
+                "available", false,
+                "pair", pair,
+                "reason", "No daily closes were returned."
+            ));
         }
         HistoricalPoint first = points.getFirst();
         HistoricalPoint last = points.getLast();
@@ -137,7 +196,7 @@ public class AssistantTools {
         body.put("change", change);
         body.put("change_percent", changePercent);
         body.put("series", sample(points, MAX_SERIES_POINTS).stream().map(this::point).toList());
-        return write(body);
+        return body;
     }
 
     private String alertHistory(JsonNode arguments) {
@@ -171,6 +230,125 @@ public class AssistantTools {
             pair, pair, limit
         );
         return write(Map.of("count", alerts.size(), "alerts", alerts));
+    }
+
+    private String alertPreferences(JsonNode arguments) {
+        String pair = optionalPair(arguments);
+        List<Map<String, Object>> rules = jdbcTemplate.query("""
+                SELECT pair, enabled, alert_type, custom_threshold, custom_period,
+                       enable_trend_consistency, lookback_years, price_high, price_low,
+                       trigger_type, volatility_type, ma_short_period, ma_long_period, signal_type
+                FROM alert_preferences
+                WHERE (? IS NULL OR pair = ?)
+                ORDER BY pair
+                """,
+            (resultSet, rowNumber) -> {
+                Map<String, Object> rule = new LinkedHashMap<>();
+                rule.put("pair", resultSet.getString("pair"));
+                rule.put("enabled", resultSet.getBoolean("enabled"));
+                rule.put("alert_type", resultSet.getString("alert_type"));
+                rule.put("custom_threshold", resultSet.getObject("custom_threshold"));
+                rule.put("custom_period", resultSet.getObject("custom_period"));
+                rule.put("enable_trend_consistency", resultSet.getBoolean("enable_trend_consistency"));
+                rule.put("lookback_years", resultSet.getInt("lookback_years"));
+                rule.put("price_high", resultSet.getObject("price_high"));
+                rule.put("price_low", resultSet.getObject("price_low"));
+                rule.put("trigger_type", resultSet.getString("trigger_type"));
+                rule.put("volatility_type", resultSet.getString("volatility_type"));
+                rule.put("ma_short_period", resultSet.getInt("ma_short_period"));
+                rule.put("ma_long_period", resultSet.getInt("ma_long_period"));
+                rule.put("signal_type", resultSet.getString("signal_type"));
+                return rule;
+            },
+            pair, pair
+        );
+        return write(Map.of("count", rules.size(), "preferences", rules));
+    }
+
+    private String monitoringState(JsonNode arguments) {
+        String pair = optionalPair(arguments);
+        List<Map<String, Object>> rows = jdbcTemplate.query("""
+                SELECT pair, last_alert_time
+                FROM monitoring_state
+                WHERE (? IS NULL OR pair = ?)
+                ORDER BY pair
+                """,
+            (resultSet, rowNumber) -> {
+                Map<String, Object> row = new LinkedHashMap<>();
+                row.put("pair", resultSet.getString("pair"));
+                OffsetDateTime lastAlert = resultSet.getObject("last_alert_time", OffsetDateTime.class);
+                row.put("last_alert_time", lastAlert == null ? null : lastAlert.toInstant().toString());
+                return row;
+            },
+            pair, pair
+        );
+        return write(Map.of("count", rows.size(), "monitoring", rows));
+    }
+
+    private String settings() {
+        List<Map<String, Object>> rows = jdbcTemplate.query(
+            "SELECT key, value FROM settings ORDER BY key",
+            (resultSet, rowNumber) -> Map.of(
+                "key", resultSet.getString("key"),
+                "value", resultSet.getString("value") == null ? "" : resultSet.getString("value")
+            )
+        );
+        List<Map<String, Object>> visible = new ArrayList<>();
+        int omitted = 0;
+        for (Map<String, Object> row : rows) {
+            String key = String.valueOf(row.get("key"));
+            if (secretSetting(key)) {
+                omitted++;
+                continue;
+            }
+            if (visible.size() >= MAX_SETTINGS) {
+                break;
+            }
+            String value = String.valueOf(row.get("value"));
+            if (value.length() > 240) {
+                value = value.substring(0, 240);
+            }
+            visible.add(Map.of("key", key, "value", value));
+        }
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("count", visible.size());
+        body.put("secrets_omitted", omitted);
+        body.put("settings", visible);
+        return write(body);
+    }
+
+    static boolean secretSetting(String key) {
+        if (key == null || key.isBlank()) {
+            return true;
+        }
+        return key.toLowerCase(Locale.ROOT).matches(".*(password|secret|token|api[-_]?key|credential).*");
+    }
+
+    private String searchNotes(JsonNode arguments) {
+        if (knowledgeRetriever == null) {
+            return error("Knowledge search is unavailable.");
+        }
+        String query = arguments.path("query").asText("").trim();
+        if (query.isEmpty()) {
+            throw new IllegalArgumentException("query is required");
+        }
+        if (query.length() > 500) {
+            query = query.substring(0, 500);
+        }
+        List<Map<String, Object>> notes = new ArrayList<>();
+        for (KnowledgeNote note : knowledgeRetriever.retrieve(query, 4)) {
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("title", note.title());
+            item.put("excerpt", note.excerpt(700));
+            notes.add(item);
+        }
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("count", notes.size());
+        body.put("notes", notes);
+        if (notes.isEmpty()) {
+            body.put("reason", "No matching note was found.");
+        }
+        return write(body);
     }
 
     private String latestForecast(JsonNode arguments) {
@@ -253,11 +431,15 @@ public class AssistantTools {
     }
 
     private static String requiredPair(JsonNode arguments) {
-        String pair = optionalPair(arguments);
-        if (pair == null) {
-            throw new IllegalArgumentException("pair is required");
+        return requiredSymbol(arguments, "pair");
+    }
+
+    private static String requiredSymbol(JsonNode arguments, String field) {
+        String symbol = optionalSymbol(arguments, field);
+        if (symbol == null) {
+            throw new IllegalArgumentException(field + " is required");
         }
-        return pair;
+        return symbol;
     }
 
     private static String optionalPair(JsonNode arguments) {

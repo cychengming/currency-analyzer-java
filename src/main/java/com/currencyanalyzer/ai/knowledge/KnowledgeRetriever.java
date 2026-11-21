@@ -1,5 +1,7 @@
 package com.currencyanalyzer.ai.knowledge;
 
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
@@ -23,14 +25,31 @@ public class KnowledgeRetriever {
     );
 
     private final KnowledgeLibrary library;
+    private final SemanticKnowledgeIndex semantic;
 
     public KnowledgeRetriever(KnowledgeLibrary library) {
+        this(library, (SemanticKnowledgeIndex) null);
+    }
+
+    @Autowired
+    public KnowledgeRetriever(KnowledgeLibrary library, ObjectProvider<SemanticKnowledgeIndex> semantic) {
+        this(library, semantic.getIfAvailable());
+    }
+
+    KnowledgeRetriever(KnowledgeLibrary library, SemanticKnowledgeIndex semantic) {
         this.library = library;
+        this.semantic = semantic;
     }
 
     public List<KnowledgeNote> retrieve(String query, int maxNotes) {
         if (query == null || query.isBlank() || maxNotes < 1) {
             return List.of();
+        }
+        if (semantic != null) {
+            List<KnowledgeNote> notes = semantic.retrieve(query, maxNotes);
+            if (!notes.isEmpty()) {
+                return notes;
+            }
         }
         String normalized = query.toLowerCase(Locale.ROOT);
         List<String> phrases = cjkPhrases(normalized);

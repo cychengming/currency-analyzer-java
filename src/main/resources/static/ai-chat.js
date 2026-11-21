@@ -232,8 +232,13 @@
         const labels = {
             get_live_rates: 'Looking up live rates...',
             get_historical_series: 'Looking up price history...',
+            compare_pairs: 'Comparing the two pairs...',
             get_alert_history: 'Looking up alerts...',
-            get_latest_forecast: 'Looking up the stored forecast...'
+            get_alert_preferences: 'Looking up alert rules...',
+            get_monitoring_state: 'Looking up monitoring state...',
+            get_settings: 'Looking up settings...',
+            get_latest_forecast: 'Looking up the stored forecast...',
+            search_notes: 'Searching the notes...'
         };
         return labels[tool] || 'Looking up application data...';
     }
