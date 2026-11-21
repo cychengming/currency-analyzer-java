@@ -196,8 +196,17 @@
                 throw new Error(error.error || `Request failed (${response.status})`);
             }
             await readEventStream(response.body, event => {
-                if (event.event === 'text_delta') {
+                if (event.event === 'tool_started') {
                     const payload = JSON.parse(event.data);
+                    if (!assistantElement.dataset.hasAnswer) {
+                        assistantElement.textContent = toolStatus(payload.tool);
+                    }
+                } else if (event.event === 'text_delta') {
+                    const payload = JSON.parse(event.data);
+                    if (!assistantElement.dataset.hasAnswer) {
+                        assistantElement.dataset.hasAnswer = 'true';
+                        assistantElement.textContent = '';
+                    }
                     assistantElement.textContent += payload.text || '';
                     scrollMessagesToBottom();
                 } else if (event.event === 'error') {
@@ -213,6 +222,16 @@
             updateSendingControls();
             await refreshConversationTitles();
         }
+    }
+
+    function toolStatus(tool) {
+        const labels = {
+            get_live_rates: 'Looking up live rates...',
+            get_historical_series: 'Looking up price history...',
+            get_alert_history: 'Looking up alerts...',
+            get_latest_forecast: 'Looking up the stored forecast...'
+        };
+        return labels[tool] || 'Looking up application data...';
     }
 
     async function stopResponse() {

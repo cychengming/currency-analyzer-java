@@ -38,7 +38,7 @@ DEEPSEEK_API_KEY=<server-side API key>
 DEEPSEEK_MODEL=deepseek-flash
 ```
 
-The API key is never sent to the browser. The current assistant can explain general concepts but does not yet have market-data tools; it must not be used for live prices, alerts, forecasts, or backtest results. Responses are educational and not investment advice. Chat text is stored in PostgreSQL under the owning account.
+The API key is never sent to the browser. When a question needs application data, the assistant can read the cached live rates, up to a year of daily history, recorded alerts, and a stored forecast. It quotes those tool results and does not invent prices. Responses are educational and not investment advice. Chat text and tool-call records are stored in PostgreSQL under the owning account.
 
 ## Enable SonarQube Cloud
 

@@ -7,6 +7,7 @@ import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -79,5 +80,50 @@ class DeepSeekAiProviderTests {
         );
 
         assertEquals("DeepSeek API key is not configured", exception.getMessage());
+    }
+
+    @Test
+    void readsToolCallsFromANonStreamingCompletion() throws Exception {
+        AtomicReference<String> requestBody = new AtomicReference<>();
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/chat/completions", exchange -> {
+            requestBody.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+            byte[] response = """
+                {"choices":[{"message":{"role":"assistant","content":null,"tool_calls":[
+                  {"id":"call-1","type":"function","function":{"name":"get_live_rates","arguments":"{}"}}
+                ]}}]}
+                """.getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().set("Content-Type", "application/json");
+            exchange.sendResponseHeaders(200, response.length);
+            exchange.getResponseBody().write(response);
+            exchange.close();
+        });
+        server.start();
+
+        try {
+            DeepSeekAiProvider provider = new DeepSeekAiProvider(
+                "http://127.0.0.1:" + server.getAddress().getPort(),
+                "test-secret",
+                "deepseek-flash",
+                5,
+                500
+            );
+            AiProvider.Completion completion = provider.complete(
+                List.of(AiProvider.Turn.text("user", "What is EUR/USD?")),
+                List.of(new AiProvider.ToolDefinition(
+                    "get_live_rates",
+                    "Read quotes",
+                    Map.of("type", "object")
+                )),
+                () -> false
+            );
+
+            assertTrue(requestBody.get().contains("\"tool_choice\":\"auto\""));
+            assertEquals("call-1", completion.toolCalls().getFirst().id());
+            assertEquals("get_live_rates", completion.toolCalls().getFirst().name());
+            assertEquals("{}", completion.toolCalls().getFirst().argumentsJson());
+        } finally {
+            server.stop(0);
+        }
     }
 }

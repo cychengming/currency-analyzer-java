@@ -103,6 +103,33 @@ public class AiConversationRepository {
         return new AiMessage(messageId, "assistant", content, now);
     }
 
+    public void addToolInvocation(
+        UUID messageId,
+        String toolName,
+        String argumentsJson,
+        String resultSummaryJson,
+        String status,
+        int durationMs,
+        Instant now
+    ) {
+        jdbcTemplate.update("""
+                INSERT INTO ai_tool_invocations (
+                    id, message_id, tool_name, arguments_json, result_summary,
+                    status, duration_ms, created_at
+                )
+                VALUES (?, ?, ?, CAST(? AS JSON), CAST(? AS JSON), ?, ?, ?)
+                """,
+            UUID.randomUUID(),
+            messageId,
+            toolName,
+            argumentsJson,
+            resultSummaryJson,
+            status,
+            durationMs,
+            OffsetDateTime.ofInstant(now, ZoneOffset.UTC)
+        );
+    }
+
     public List<AiProviderMessage> findRecentMessages(UUID conversationId) {
         List<AiProviderMessage> history = jdbcTemplate.query("""
                 SELECT role, content

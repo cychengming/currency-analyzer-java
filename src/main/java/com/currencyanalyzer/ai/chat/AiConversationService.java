@@ -3,7 +3,11 @@ package com.currencyanalyzer.ai.chat;
 import com.currencyanalyzer.ai.knowledge.AssistantPrompt;
 import com.currencyanalyzer.ai.knowledge.KnowledgeRetriever;
 import com.currencyanalyzer.ai.provider.AiProvider;
+import com.currencyanalyzer.ai.provider.AiProvider.Completion;
+import com.currencyanalyzer.ai.provider.AiProvider.ToolCall;
+import com.currencyanalyzer.ai.provider.AiProvider.Turn;
 import com.currencyanalyzer.ai.provider.AiProviderException;
+import com.currencyanalyzer.ai.tools.AssistantTools;
 import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -31,8 +35,12 @@ public class AiConversationService {
 
     private static final Logger log = LoggerFactory.getLogger(AiConversationService.class);
 
+    private static final int MAX_TOOL_ROUNDS = 3;
+    private static final int MAX_TOOL_CALLS_PER_ROUND = 4;
+
     private final AiConversationRepository conversationRepository;
     private final AiProvider aiProvider;
+    private final AssistantTools assistantTools;
     private final KnowledgeRetriever knowledgeRetriever;
     private final Clock clock;
     private final String provider;
@@ -47,6 +55,7 @@ public class AiConversationService {
     public AiConversationService(
         AiConversationRepository conversationRepository,
         AiProvider aiProvider,
+        AssistantTools assistantTools,
         KnowledgeRetriever knowledgeRetriever,
         Clock clock,
         @Value("${app.ai.provider:deepseek}") String provider,
@@ -58,6 +67,7 @@ public class AiConversationService {
     ) {
         this.conversationRepository = conversationRepository;
         this.aiProvider = aiProvider;
+        this.assistantTools = assistantTools;
         this.knowledgeRetriever = knowledgeRetriever;
         this.clock = clock;
         this.provider = provider;
@@ -165,21 +175,31 @@ public class AiConversationService {
             List<AiProvider.Message> history = conversationRepository.findRecentMessages(conversationId).stream()
                 .map(message -> new AiProvider.Message(message.role(), message.content()))
                 .toList();
-            List<AiProvider.Message> prompt = new ArrayList<>(history.size() + 1);
-            prompt.add(new AiProvider.Message("system", systemMessage(latestUserMessage(history))));
-            prompt.addAll(history);
-            aiProvider.stream(prompt, delta -> {
-                if (activeResponse.cancelled.get() || delta.isEmpty()) {
-                    return;
-                }
-                responseText.append(delta);
-                sendEvent(activeResponse.emitter, "text_delta", Map.of("text", delta));
-            }, activeResponse.cancelled::get);
+            List<Turn> prompt = new ArrayList<>(history.size() + 1);
+            prompt.add(Turn.text("system", systemMessage(latestUserMessage(history))));
+            history.forEach(message -> prompt.add(Turn.text(message.role(), message.content())));
+            List<ToolTrace> toolTraces = new ArrayList<>();
+            boolean usedTools = answerWithTools(conversationId, activeResponse, prompt, responseText, toolTraces);
+            if (!usedTools && responseText.isEmpty() && !activeResponse.cancelled.get()) {
+                aiProvider.stream(historyWithSystem(prompt), delta -> appendDelta(activeResponse, responseText, delta),
+                    activeResponse.cancelled::get);
+            }
 
             if (!activeResponse.cancelled.get() && !responseText.isEmpty()) {
                 AiMessage assistantMessage = conversationRepository.addAssistantMessage(
                     conversationId, responseText.toString(), clock.instant()
                 );
+                for (ToolTrace toolTrace : toolTraces) {
+                    conversationRepository.addToolInvocation(
+                        assistantMessage.id(),
+                        toolTrace.name(),
+                        toolTrace.argumentsJson(),
+                        toolTrace.summaryJson(),
+                        toolTrace.status(),
+                        toolTrace.durationMs(),
+                        clock.instant()
+                    );
+                }
                 sendEvent(activeResponse.emitter, "message_completed", Map.of(
                     "message_id", assistantMessage.id().toString(),
                     "finish_reason", "completed"
@@ -224,6 +244,93 @@ public class AiConversationService {
         activeResponses.remove(conversationId, activeResponse);
     }
 
+    private boolean answerWithTools(
+        UUID conversationId,
+        ActiveResponse activeResponse,
+        List<Turn> prompt,
+        StringBuilder responseText,
+        List<ToolTrace> toolTraces
+    ) {
+        boolean usedTools = false;
+        for (int round = 0; round < MAX_TOOL_ROUNDS && !activeResponse.cancelled.get(); round++) {
+            boolean forceAnswer = usedTools && round == MAX_TOOL_ROUNDS - 1;
+            Completion completion = aiProvider.complete(
+                prompt,
+                forceAnswer ? List.of() : assistantTools.definitions(),
+                activeResponse.cancelled::get
+            );
+            appendDelta(activeResponse, responseText, completion.content());
+            if (!completion.hasToolCalls() || forceAnswer) {
+                return usedTools || responseText.length() > 0;
+            }
+            usedTools = true;
+            List<ToolCall> calls = completion.toolCalls();
+            int accepted = Math.min(calls.size(), MAX_TOOL_CALLS_PER_ROUND);
+            prompt.add(Turn.toolRequest(completion.content(), calls.subList(0, accepted)));
+            for (int index = 0; index < calls.size(); index++) {
+                ToolCall call = calls.get(index);
+                if (index >= accepted) {
+                    prompt.add(Turn.toolResult(call.id(), "{\"error\":\"Too many tool calls in one step.\"}"));
+                    continue;
+                }
+                prompt.add(executeTool(conversationId, activeResponse, call, toolTraces));
+            }
+        }
+        if (usedTools && responseText.isEmpty() && !activeResponse.cancelled.get()) {
+            Completion completion = aiProvider.complete(prompt, List.of(), activeResponse.cancelled::get);
+            appendDelta(activeResponse, responseText, completion.content());
+        }
+        return usedTools || responseText.length() > 0;
+    }
+
+    private Turn executeTool(
+        UUID conversationId,
+        ActiveResponse activeResponse,
+        ToolCall call,
+        List<ToolTrace> toolTraces
+    ) {
+        sendEvent(activeResponse.emitter, "tool_started", Map.of("tool", call.name()));
+        long startedAt = System.nanoTime();
+        String result = assistantTools.execute(call.name(), call.argumentsJson());
+        int durationMs = (int) Math.min(Integer.MAX_VALUE, (System.nanoTime() - startedAt) / 1_000_000);
+        boolean failed = result.startsWith("{\"error\"");
+        toolTraces.add(new ToolTrace(
+            call.name(),
+            truncate(call.argumentsJson(), 2000),
+            failed ? "error" : "ok",
+            durationMs,
+            failed ? "{\"status\":\"error\"}" : "{\"status\":\"ok\"}"
+        ));
+        sendEvent(activeResponse.emitter, "tool_completed", Map.of(
+            "tool", call.name(),
+            "status", failed ? "error" : "ok"
+        ));
+        log.debug("Tool {} finished for conversation {} in {} ms", call.name(), conversationId, durationMs);
+        return Turn.toolResult(call.id(), result);
+    }
+
+    private void appendDelta(ActiveResponse activeResponse, StringBuilder responseText, String delta) {
+        if (activeResponse.cancelled.get() || delta == null || delta.isEmpty()) {
+            return;
+        }
+        responseText.append(delta);
+        sendEvent(activeResponse.emitter, "text_delta", Map.of("text", delta));
+    }
+
+    private static List<AiProvider.Message> historyWithSystem(List<Turn> prompt) {
+        return prompt.stream()
+            .filter(turn -> turn.toolCalls().isEmpty() && turn.toolCallId() == null)
+            .map(turn -> new AiProvider.Message(turn.role(), turn.content()))
+            .toList();
+    }
+
+    private static String truncate(String value, int maxChars) {
+        if (value == null || value.length() <= maxChars) {
+            return value == null ? "{}" : value;
+        }
+        return value.substring(0, maxChars);
+    }
+
     private String systemMessage(String userMessage) {
         if (!knowledgeEnabled) {
             return AssistantPrompt.systemMessage(List.of(), 0);
@@ -250,6 +357,15 @@ public class AiConversationService {
         } catch (IOException exception) {
             throw new IllegalStateException("Unable to write the assistant response stream", exception);
         }
+    }
+
+    private record ToolTrace(
+        String name,
+        String argumentsJson,
+        String status,
+        int durationMs,
+        String summaryJson
+    ) {
     }
 
     private static final class ActiveResponse {
