@@ -22,7 +22,73 @@
         document.getElementById('aiConversationSelect').addEventListener('change', selectConversation);
         document.getElementById('aiChatForm').addEventListener('submit', sendMessage);
         document.getElementById('aiChatStopButton').addEventListener('click', stopResponse);
+        installPanelResize(panel);
         panel.hidden = true;
+    }
+
+    function installPanelResize(panel) {
+        const handle = document.getElementById('aiChatResize');
+        const storageKey = 'ai-chat-panel-width';
+        const minimumWidth = 320;
+
+        function maximumWidth() {
+            return Math.max(minimumWidth, Math.min(window.innerWidth, 960));
+        }
+
+        function applyWidth(width) {
+            const next = Math.round(Math.min(maximumWidth(), Math.max(minimumWidth, width)));
+            panel.style.setProperty('--ai-chat-width', `${next}px`);
+            handle.setAttribute('aria-valuemin', String(minimumWidth));
+            handle.setAttribute('aria-valuemax', String(maximumWidth()));
+            handle.setAttribute('aria-valuenow', String(next));
+            return next;
+        }
+
+        const saved = Number(localStorage.getItem(storageKey));
+        if (saved >= minimumWidth) {
+            applyWidth(saved);
+        }
+
+        handle.addEventListener('pointerdown', event => {
+            event.preventDefault();
+            try {
+                handle.setPointerCapture(event.pointerId);
+            } catch (exception) {
+                // Synthetic pointer events in tests have no active pointer to capture.
+            }
+            const move = pointerEvent => applyWidth(window.innerWidth - pointerEvent.clientX);
+            const finish = pointerEvent => {
+                try {
+                    if (handle.hasPointerCapture(pointerEvent.pointerId)) {
+                        handle.releasePointerCapture(pointerEvent.pointerId);
+                    }
+                } catch (exception) {
+                    // The pointer was already released.
+                }
+                handle.removeEventListener('pointermove', move);
+                handle.removeEventListener('pointerup', finish);
+                handle.removeEventListener('pointercancel', finish);
+                localStorage.setItem(storageKey, handle.getAttribute('aria-valuenow'));
+            };
+            handle.addEventListener('pointermove', move);
+            handle.addEventListener('pointerup', finish);
+            handle.addEventListener('pointercancel', finish);
+        });
+
+        handle.addEventListener('keydown', event => {
+            const step = event.shiftKey ? 80 : 24;
+            const current = Number(handle.getAttribute('aria-valuenow')) || 440;
+            if (event.key === 'ArrowLeft') {
+                localStorage.setItem(storageKey, String(applyWidth(current + step)));
+            } else if (event.key === 'ArrowRight') {
+                localStorage.setItem(storageKey, String(applyWidth(current - step)));
+            } else {
+                return;
+            }
+            event.preventDefault();
+        });
+
+        window.addEventListener('resize', () => applyWidth(Number(handle.getAttribute('aria-valuenow')) || 440));
     }
 
     async function openChat() {
