@@ -24,3 +24,7 @@ logs/
 # OS files
 .DS_Store
 Thumbs.db
+
+# Book scans and raw source dumps do not belong in the assistant knowledge folder
+src/main/resources/knowledge/raw/
+src/main/resources/knowledge/**/*.pdf
