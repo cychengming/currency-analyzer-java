@@ -42,7 +42,7 @@ public class DeepSeekAiProvider implements AiProvider {
         @Value("${app.ai.deepseek.api-key:}") String apiKey,
         @Value("${app.ai.model:deepseek-flash}") String model,
         @Value("${app.ai.request-timeout-seconds:60}") int requestTimeoutSeconds,
-        @Value("${app.ai.max-output-tokens:1200}") int maxOutputTokens
+        @Value("${app.ai.max-output-tokens:8192}") int maxOutputTokens
     ) {
         this.httpClient = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(10))
