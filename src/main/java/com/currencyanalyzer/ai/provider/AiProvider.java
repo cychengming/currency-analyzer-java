@@ -14,6 +14,16 @@ public interface AiProvider {
         BooleanSupplier isCancelled
     );
 
+    default void stream(
+        List<Message> messages,
+        Consumer<String> onText,
+        Consumer<String> onReasoning,
+        BooleanSupplier isCancelled,
+        boolean thinking
+    ) {
+        stream(messages, onText, onReasoning, isCancelled);
+    }
+
     default Completion complete(
         List<Turn> messages,
         List<ToolDefinition> tools,

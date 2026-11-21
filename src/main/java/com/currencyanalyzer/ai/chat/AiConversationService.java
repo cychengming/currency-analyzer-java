@@ -197,6 +197,9 @@ public class AiConversationService {
                         activeResponse.cancelled::get
                     );
                 }
+                if (responseText.isEmpty() && !activeResponse.cancelled.get()) {
+                    retryWithoutThinking(activeResponse, prompt, responseText, reasoningText);
+                }
             }
 
             if (!activeResponse.cancelled.get() && !responseText.isEmpty()) {
@@ -256,6 +259,24 @@ public class AiConversationService {
 
     private void finishResponse(UUID conversationId, ActiveResponse activeResponse) {
         activeResponses.remove(conversationId, activeResponse);
+    }
+
+    private void retryWithoutThinking(
+        ActiveResponse activeResponse,
+        List<Turn> prompt,
+        StringBuilder responseText,
+        StringBuilder reasoningText
+    ) {
+        log.warn("DeepSeek produced no answer text. Retrying with thinking disabled.");
+        List<AiProvider.Message> retry = new ArrayList<>(historyWithSystem(prompt));
+        retry.add(new AiProvider.Message("user", "Write the final answer now. Do not leave it blank."));
+        aiProvider.stream(
+            retry,
+            delta -> appendDelta(activeResponse, responseText, delta),
+            delta -> appendReasoning(activeResponse, reasoningText, delta),
+            activeResponse.cancelled::get,
+            false
+        );
     }
 
     private void answerWithSpringAi(

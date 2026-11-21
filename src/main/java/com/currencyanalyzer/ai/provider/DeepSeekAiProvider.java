@@ -6,6 +6,8 @@ import com.currencyanalyzer.ai.provider.AiProvider.ToolDefinition;
 import com.currencyanalyzer.ai.provider.AiProvider.Turn;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
@@ -24,6 +26,8 @@ import java.util.function.Consumer;
 
 @Component
 public class DeepSeekAiProvider implements AiProvider {
+
+    private static final Logger log = LoggerFactory.getLogger(DeepSeekAiProvider.class);
 
     private final HttpClient httpClient;
     private final ObjectMapper objectMapper = new ObjectMapper();
@@ -57,6 +61,17 @@ public class DeepSeekAiProvider implements AiProvider {
         Consumer<String> onReasoning,
         BooleanSupplier isCancelled
     ) {
+        stream(messages, onText, onReasoning, isCancelled, true);
+    }
+
+    @Override
+    public void stream(
+        List<Message> messages,
+        Consumer<String> onText,
+        Consumer<String> onReasoning,
+        BooleanSupplier isCancelled,
+        boolean thinking
+    ) {
         if (apiKey.isBlank()) {
             throw new AiProviderException("DeepSeek API key is not configured");
         }
@@ -67,7 +82,7 @@ public class DeepSeekAiProvider implements AiProvider {
             body.put("messages", messages);
             body.put("stream", true);
             body.put("max_tokens", maxOutputTokens);
-            body.put("thinking", Map.of("type", "enabled"));
+            body.put("thinking", Map.of("type", thinking ? "enabled" : "disabled"));
             String payload = objectMapper.writeValueAsString(body);
             HttpRequest request = HttpRequest.newBuilder()
                 .uri(URI.create(baseUrl + "/chat/completions"))
@@ -87,6 +102,8 @@ public class DeepSeekAiProvider implements AiProvider {
                     );
                 }
 
+                boolean sawText = false;
+                String finishReason = null;
                 for (String line : (Iterable<String>) lines::iterator) {
                     if (isCancelled.getAsBoolean() || Thread.currentThread().isInterrupted()) {
                         return;
@@ -96,9 +113,19 @@ public class DeepSeekAiProvider implements AiProvider {
                     }
                     String data = line.substring("data:".length()).trim();
                     if ("[DONE]".equals(data)) {
-                        return;
+                        break;
                     }
-                    emitTextDelta(data, onText, onReasoning);
+                    StreamPiece piece = emitTextDelta(data, onText, onReasoning);
+                    sawText = sawText || piece.text();
+                    if (piece.finishReason() != null) {
+                        finishReason = piece.finishReason();
+                    }
+                }
+                if (!sawText && !isCancelled.getAsBoolean()) {
+                    log.warn(
+                        "DeepSeek returned no answer text (finish_reason={})",
+                        finishReason == null ? "unknown" : finishReason
+                    );
                 }
             }
         } catch (InterruptedException exception) {
@@ -160,7 +187,8 @@ public class DeepSeekAiProvider implements AiProvider {
     }
 
     private Completion parseCompletion(String body) throws IOException {
-        JsonNode message = objectMapper.readTree(body).path("choices").path(0).path("message");
+        JsonNode choice = objectMapper.readTree(body).path("choices").path(0);
+        JsonNode message = choice.path("message");
         String content = message.path("content").isTextual() ? message.path("content").asText() : null;
         String reasoning = message.path("reasoning_content").isTextual()
             ? message.path("reasoning_content").asText()
@@ -175,6 +203,12 @@ public class DeepSeekAiProvider implements AiProvider {
             if (!name.isBlank()) {
                 toolCalls.add(new ToolCall(id.isBlank() ? "call-" + toolCalls.size() : id, name, argumentsJson));
             }
+        }
+        if ((content == null || content.isBlank()) && toolCalls.isEmpty()) {
+            log.warn(
+                "DeepSeek completion returned no answer text (finish_reason={})",
+                finishReason(choice)
+            );
         }
         return new Completion(content, reasoning, toolCalls);
     }
@@ -213,20 +247,38 @@ public class DeepSeekAiProvider implements AiProvider {
         );
     }
 
-    private void emitTextDelta(String data, Consumer<String> onText, Consumer<String> onReasoning) {
+    private StreamPiece emitTextDelta(String data, Consumer<String> onText, Consumer<String> onReasoning) {
         try {
-            JsonNode delta = objectMapper.readTree(data).path("choices").path(0).path("delta");
+            JsonNode choice = objectMapper.readTree(data).path("choices").path(0);
+            JsonNode delta = choice.path("delta");
             JsonNode reasoning = delta.path("reasoning_content");
             if (onReasoning != null && reasoning.isTextual() && !reasoning.asText().isEmpty()) {
                 onReasoning.accept(reasoning.asText());
             }
             JsonNode content = delta.path("content");
-            if (content.isTextual() && !content.asText().isEmpty()) {
+            boolean text = content.isTextual() && !content.asText().isEmpty();
+            if (text) {
                 onText.accept(content.asText());
             }
+            return new StreamPiece(text, textual(choice.path("finish_reason")));
         } catch (IOException exception) {
             throw new AiProviderException("DeepSeek returned an invalid streaming response", exception);
         }
+    }
+
+    private static String finishReason(JsonNode choice) {
+        String reason = textual(choice.path("finish_reason"));
+        return reason == null ? "unknown" : reason;
+    }
+
+    private static String textual(JsonNode node) {
+        if (!node.isTextual() || node.asText().isBlank() || "null".equals(node.asText())) {
+            return null;
+        }
+        return node.asText();
+    }
+
+    private record StreamPiece(boolean text, String finishReason) {
     }
 
     private static String withoutTrailingSlashes(String value) {

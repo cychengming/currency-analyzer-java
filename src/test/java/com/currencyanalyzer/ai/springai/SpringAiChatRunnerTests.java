@@ -5,6 +5,8 @@ import com.currencyanalyzer.ai.tools.AssistantTools;
 import com.currencyanalyzer.marketdata.MarketDataService;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.messages.AssistantMessage;
+import org.springframework.ai.chat.messages.Message;
+import org.springframework.ai.chat.metadata.ChatGenerationMetadata;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
@@ -12,6 +14,7 @@ import org.springframework.ai.chat.prompt.ChatOptions;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.deepseek.DeepSeekAssistantMessage;
 import org.springframework.ai.deepseek.DeepSeekChatOptions;
+import org.springframework.ai.deepseek.api.DeepSeekApi;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.jdbc.core.JdbcTemplate;
 import reactor.core.publisher.Flux;
@@ -74,6 +77,46 @@ class SpringAiChatRunnerTests {
         assertTrue(events.contains("finished:get_live_rates"));
         assertTrue(events.contains("text:From the live feed."));
         assertTrue(events.contains("reasoning:The quote is in."));
+    }
+
+    @Test
+    void retriesWhenReasoningUsesTheWholeAnswerBudget() {
+        ReasoningOnlyThenAnswer model = new ReasoningOnlyThenAnswer();
+        SpringAiChatRunner runner = runner(model);
+        List<String> events = new ArrayList<>();
+
+        runner.answer("Be brief.", List.of(new SpringAiChatRunner.PriorMessage("user", "Explain the Kelly formula.", null)),
+            new SpringAiChatRunner.StreamListener() {
+                @Override
+                public void onText(String delta) {
+                    events.add("text:" + delta);
+                }
+
+                @Override
+                public void onReasoning(String delta) {
+                    events.add("reasoning:" + delta);
+                }
+
+                @Override
+                public void onToolStarted(String name) {
+                }
+
+                @Override
+                public void onToolFinished(String name, String argumentsJson, String result, int durationMs) {
+                }
+            },
+            () -> false
+        );
+
+        assertEquals(List.of(
+            DeepSeekApi.ChatCompletionRequest.Thinking.Type.ENABLED,
+            DeepSeekApi.ChatCompletionRequest.Thinking.Type.DISABLED
+        ), model.thinking);
+        assertEquals("Write the final answer now. Do not leave it blank.", model.nudge);
+        assertEquals(List.of("reasoning:The token budget was spent here."), events.stream()
+            .filter(event -> event.startsWith("reasoning:")).toList());
+        assertEquals(List.of("text:Bet a fraction of the bankroll."), events.stream()
+            .filter(event -> event.startsWith("text:")).toList());
     }
 
     @Test
@@ -212,6 +255,50 @@ class SpringAiChatRunnerTests {
                 .reasoningContent("The quote is in.")
                 .build();
             return Flux.just(new ChatResponse(List.of(new Generation(message))));
+        }
+
+        @Override
+        public ChatOptions getDefaultOptions() {
+            return DeepSeekChatOptions.builder().model("deepseek-flash").build();
+        }
+    }
+
+    private static final class ReasoningOnlyThenAnswer implements ChatModel {
+        private final List<DeepSeekApi.ChatCompletionRequest.Thinking.Type> thinking = new ArrayList<>();
+        private String nudge;
+        private int calls;
+
+        @Override
+        public ChatResponse call(Prompt prompt) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public Flux<ChatResponse> stream(Prompt prompt) {
+            calls++;
+            DeepSeekChatOptions options = (DeepSeekChatOptions) prompt.getOptions();
+            thinking.add(options.getThinking().type());
+            if (calls == 1) {
+                DeepSeekAssistantMessage message = DeepSeekAssistantMessage.builder()
+                    .content("")
+                    .reasoningContent("The token budget was spent here.")
+                    .build();
+                Generation generation = new Generation(
+                    message,
+                    ChatGenerationMetadata.builder().finishReason("LENGTH").build()
+                );
+                return Flux.just(new ChatResponse(List.of(generation)));
+            }
+            List<Message> instructions = prompt.getInstructions();
+            nudge = instructions.getLast().getText();
+            DeepSeekAssistantMessage message = DeepSeekAssistantMessage.builder()
+                .content("Bet a fraction of the bankroll.")
+                .build();
+            Generation generation = new Generation(
+                message,
+                ChatGenerationMetadata.builder().finishReason("STOP").build()
+            );
+            return Flux.just(new ChatResponse(List.of(generation)));
         }
 
         @Override

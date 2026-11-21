@@ -15,6 +15,8 @@ import org.springframework.ai.model.tool.ToolCallingManager;
 import org.springframework.ai.model.tool.ToolExecutionResult;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.method.MethodToolCallbackProvider;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
@@ -22,13 +24,16 @@ import org.springframework.stereotype.Component;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
 
 @Component
 public class SpringAiChatRunner {
 
+    private static final Logger log = LoggerFactory.getLogger(SpringAiChatRunner.class);
     private static final int MAX_TOOL_ROUNDS = 3;
     private static final int MAX_TOOL_CALLS_PER_ROUND = 4;
+    private static final String ANSWER_NUDGE = "Write the final answer now. Do not leave it blank.";
 
     private final ObjectProvider<ChatModel> chatModels;
     private final SpringAiMarketTools marketTools;
@@ -71,39 +76,71 @@ public class SpringAiChatRunner {
         boolean usedTools = false;
         TextCount textCount = new TextCount();
         StreamListener counting = textCount.wrap(listener);
+        Round lastRound = null;
         for (int round = 0; round < MAX_TOOL_ROUNDS && !cancelled.getAsBoolean(); round++) {
             boolean forceAnswer = usedTools && round == MAX_TOOL_ROUNDS - 1;
-            boolean calledTool = streamRound(chatModel, messages, !forceAnswer, counting, cancelled);
-            if (!calledTool) {
+            lastRound = streamRound(chatModel, messages, !forceAnswer, true, counting, cancelled);
+            if (!lastRound.calledTool()) {
                 break;
             }
             usedTools = true;
         }
-        if (usedTools && textCount.chars == 0 && !cancelled.getAsBoolean()) {
-            streamRound(chatModel, messages, false, counting, cancelled);
+        if (textCount.chars == 0 && lastRound != null && !cancelled.getAsBoolean()) {
+            requestAnswerWithoutThinking(chatModel, messages, lastRound, counting, cancelled, textCount);
         }
     }
 
-    private boolean streamRound(
+    private void requestAnswerWithoutThinking(
+        ChatModel chatModel,
+        List<Message> messages,
+        Round previous,
+        StreamListener listener,
+        BooleanSupplier cancelled,
+        TextCount textCount
+    ) {
+        log.warn(
+            "DeepSeek returned no answer text (finish_reason={}, reasoning_chars={}). Retrying with thinking disabled.",
+            shown(previous.finishReason()),
+            previous.reasoning().length()
+        );
+        messages.add(new UserMessage(ANSWER_NUDGE));
+        Round retry = streamRound(chatModel, messages, false, false, listener, cancelled);
+        if (textCount.chars == 0 && !cancelled.getAsBoolean()) {
+            log.warn(
+                "DeepSeek retry returned no answer text (finish_reason={})",
+                shown(retry.finishReason())
+            );
+        }
+    }
+
+    private Round streamRound(
         ChatModel chatModel,
         List<Message> messages,
         boolean includeTools,
+        boolean thinking,
         StreamListener listener,
         BooleanSupplier cancelled
     ) {
-        DeepSeekChatOptions options = options(includeTools);
+        DeepSeekChatOptions options = options(includeTools, thinking);
         Prompt prompt = new Prompt(messages, options);
         StringBuilder text = new StringBuilder();
         StringBuilder reasoning = new StringBuilder();
         ToolCallBuffer toolCalls = new ToolCallBuffer();
+        AtomicReference<String> finishReason = new AtomicReference<>();
         try {
             chatModel.stream(prompt)
                 .takeWhile(chunk -> !cancelled.getAsBoolean())
-                .doOnNext(chunk -> absorb(chunk, text, reasoning, toolCalls, listener))
+                .doOnNext(chunk -> {
+                    absorb(chunk, text, reasoning, toolCalls, listener);
+                    String reason = finishReason(chunk);
+                    if (reason != null) {
+                        finishReason.set(reason);
+                    }
+                })
                 .blockLast();
         } catch (RuntimeException exception) {
             if (cancelled.getAsBoolean()) {
-                return false;
+                return new Round(false, reasoning.toString(), finishReason.get());
             }
             if (exception instanceof AiProviderException providerException) {
                 throw providerException;
@@ -111,11 +148,11 @@ public class SpringAiChatRunner {
             throw new AiProviderException("Unable to communicate with DeepSeek", exception);
         }
         if (cancelled.getAsBoolean() || !includeTools) {
-            return false;
+            return new Round(false, reasoning.toString(), finishReason.get());
         }
         List<AssistantMessage.ToolCall> calls = toolCalls.toList();
         if (calls.isEmpty()) {
-            return false;
+            return new Round(false, reasoning.toString(), finishReason.get());
         }
         if (calls.size() > MAX_TOOL_CALLS_PER_ROUND) {
             calls = List.copyOf(calls.subList(0, MAX_TOOL_CALLS_PER_ROUND));
@@ -144,7 +181,22 @@ public class SpringAiChatRunner {
         } finally {
             ToolActivity.clear();
         }
-        return true;
+        return new Round(true, reasoning.toString(), finishReason.get());
+    }
+
+    private static String finishReason(ChatResponse chunk) {
+        if (chunk.getResult() == null || chunk.getResult().getMetadata() == null) {
+            return null;
+        }
+        String reason = chunk.getResult().getMetadata().getFinishReason();
+        if (reason == null || reason.isBlank()) {
+            return null;
+        }
+        return reason;
+    }
+
+    private static String shown(String finishReason) {
+        return finishReason == null || finishReason.isBlank() ? "unknown" : finishReason;
     }
 
     private void absorb(
@@ -172,11 +224,15 @@ public class SpringAiChatRunner {
         toolCalls.absorb(output.getToolCalls());
     }
 
-    private DeepSeekChatOptions options(boolean includeTools) {
+    private DeepSeekChatOptions options(boolean includeTools, boolean thinking) {
         DeepSeekChatOptions.Builder builder = DeepSeekChatOptions.builder()
             .model(model)
-            .maxTokens(maxOutputTokens)
-            .enableThinking();
+            .maxTokens(maxOutputTokens);
+        if (thinking) {
+            builder.enableThinking();
+        } else {
+            builder.disableThinking();
+        }
         if (includeTools) {
             builder.toolCallbacks(toolCallbacks());
         }
@@ -213,6 +269,9 @@ public class SpringAiChatRunner {
     }
 
     public record PriorMessage(String role, String content, String reasoning) {
+    }
+
+    private record Round(boolean calledTool, String reasoning, String finishReason) {
     }
 
     public interface StreamListener {
