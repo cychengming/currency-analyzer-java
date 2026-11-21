@@ -1,8 +1,6 @@
 ---
 tags: [投资哲学, AI, 基础设施, 半导体, 估值, 凯利框架]
 source: https://www.youtube.com/watch?v=Mmj_G9RlW-I
-raw_pdf: ../raw/sources/youtube_Mmj_G9RlW-I_dialogue.pdf
-raw_txt: ../raw/sources/youtube_Mmj_G9RlW-I_dialogue.txt
 created: 2026-05-24
 speaker: "Gavin Baker (Atreides Management)"
 ---
@@ -11,7 +9,7 @@ speaker: "Gavin Baker (Atreides Management)"
 
 > Patrick O'Shaughnessy × Gavin Baker 第六次对谈。2026年3-4月 AI 回调背景。
 > Gavin Baker: Atreides Management 合伙人，前 Fidelity 基金经理，专注科技/半导体深度研究。
-> [[youtube_Mmj_G9RlW-I_dialogue.pdf|完整对话PDF]] | [[Gavin Baker 投资哲学|旧版分析]]
+> 英文整理见 [[gavin-baker-ai-infrastructure-capitalism-2026]]。
 
 ---
 

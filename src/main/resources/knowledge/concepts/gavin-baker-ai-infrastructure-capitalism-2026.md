@@ -1,7 +1,6 @@
 ---
 tags: [investing, ai-infrastructure, semiconductor, gavin-baker]
 source: https://www.youtube.com/watch?v=Mmj_G9RlW-I
-raw_pdf: ../raw/sources/youtube_Mmj_G9RlW-I_2026-05-24.pdf
 created: 2026-05-24
 ---
 

@@ -2,7 +2,7 @@
 title: Beyond Greed and Fear — 行为金融学全景解析
 author: Hersh Shefrin
 year: 1999
-source: "raw/sources/Beyond_Greed_and_Fear.pdf"
+source: "Hersh Shefrin, Beyond Greed and Fear, 1999"
 tags:
   - book
   - behavioral-finance

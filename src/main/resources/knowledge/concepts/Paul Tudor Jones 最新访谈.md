@@ -6,7 +6,7 @@ created: 2026-05-24
 
 # Paul Tudor Jones：趋势、风险与 252% 的股市
 
-> 来源：访谈播客（2026）。PTJ，结构转折型交易传奇。详见 [[Paul Tudor Jones 的结构转折型复利]]。完整文字稿：[[raw/sources/Paul Tudor Jones 完整文字稿]]
+> 来源：访谈播客（2026），https://www.youtube.com/watch?v=S31J5ACsOqU。结构转折型交易见 [[Paul Tudor Jones 的结构转折型复利]]。
 
 ---
 

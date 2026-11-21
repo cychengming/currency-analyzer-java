@@ -6,7 +6,7 @@ created: 2026-05-24
 
 # Stan Druckenmiller：逆向思维被高估了
 
-> 来源：Morgan Stanley "Hard Lessons" 播客。Druckenmiller 管理 Duquesne Capital 30 年年化 ~30%，**无一年亏损**（1981-2010）。现管理家族办公室。完整文字稿：[[raw/sources/Stan Druckenmiller 完整文字稿]]
+> 来源：Morgan Stanley "Hard Lessons" 播客，https://www.youtube.com/watch?v=z_pk4eBDaLA。Druckenmiller 管理 Duquesne Capital 30 年年化约 30%，1981–2010 没有一年亏损。现管理家族办公室。
 
 ---
 
