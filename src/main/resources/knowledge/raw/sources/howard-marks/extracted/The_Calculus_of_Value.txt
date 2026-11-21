@@ -1,0 +1,189 @@
+=== The Calculus of Value (2025) (Page 1599) ===
+
+Memo to: 
+Oaktree Clients 
+From: 
+Howard Marks 
+Re: 
+The Calculus of Value 
+On July 28, I flew to South America on a plane without Wi-Fi, leaving me without email or entertainment.  
+What was I to do but start in on a memo?  Interestingly, the things I wrote during that flight turned out to 
+be the answers to many of the questions I received from clients after I landed, so writing what follows 
+served me well.  I hope it’ll do the same for you. 
+*            *  
+*
+January 2 of this year was the 25th anniversary of my memo bubble.com, the one that put my writing on 
+the map, and I marked the occasion by publishing another memo, called On Bubble Watch.  While the 
+title may have raised concern for readers, my main conclusion was that the elevated U.S. stock market 
+valuations at the time didn’t necessarily signal the existence of a bubble, mainly because I didn’t detect 
+the extreme investor psychology I associate with bubbles.  Security prices were “lofty but not nutty” is 
+how I put it.  Because a lot has taken place in the seven months since then, it’s time for an update on asset 
+values. 
+Before I start, please note that I’m talking about investing in general.  My specific reference will be to 
+public U.S. corporate securities – stocks and bonds – since they mark to market regularly and are the 
+assets that most enter my consciousness.  But since investors’ actions toward one group of assets and the 
+resulting price movements influence other assets and other markets – and since they ensue largely from 
+investor psychology, which is highly contagious – I think my comments are probably applicable to other 
+asset classes, to private assets as well as public ones, and possibly to markets outside the U.S.  
+I’ll start by laying out where I think investment value comes from and how it should be assessed.  I don’t 
+think I’ve ever done this before in this form.  It’s a big topic, but I’ll try to cover it briefly. 
+Value 
+Investment assets – things such as stocks, bonds, companies, and buildings – have a value, which is 
+sometimes referred to as their “intrinsic value”: what the asset is “worth” at a point in time.  This 
+value is subjective.  It can’t definitively be found anywhere – not even by AI, as far as I know – and 
+opinions will differ as to what it is.   
+In my parlance, the value of an asset is derived from its “fundamentals.”  The fundamentals of a company, 
+for example, encompass a great many things.  These include its current earnings, its earning power in the 
+future, the steadiness or variability of its future earnings, the market value of its component assets, the 
+skill of management, its potential to develop new products, the competitive landscape, the strength of its 
+balance sheet, and the myriad additional factors that will influence the company’s future.  Ultimately, the 
+totality of an asset’s fundamentals constitute its earning power, which in turn is the source of its 
+value.   
+2025 Oaktree Capital Management, L.P.
+All Rights Reserved
+
+A company may own land, buildings, machinery, vehicles, and natural resources such as mineral deposits 
+or forests, and even facilities that allow it to derive electricity from river water or sunshine (which it 
+obviously doesn’t own).  These are tangible assets, and there’s often a market for them and a realizable 
+price.  But a company may also have assets that are intangible, such as patents, trade secrets, knowhow, 
+research capability, reputation and image, human talent, management skill, and culture.  Some of these 
+may be transferable and salable, but others are not. 
+All the assets mentioned above have earning power individually, and in combination they create a 
+company’s overall earning power.  A company’s earning power almost always exceeds the sum of the 
+earning power of each of its individual assets taken in isolation.  Combining individual assets to 
+maximize a company’s overall earning power is the top job of management.  When successful, the result 
+is synergy: the benefit gained from skillfully combining things. 
+But not all assets have earning power (as I define it), and thus not all have calculable investment value.  I 
+describe earning power as the money you can make by owning and operating an asset – that is, I omit 
+from “earnings” the possible gains from simply holding an asset and ultimately selling it.  A diamond 
+ring, painting, or classic car doesn’t produce earnings for its owner (short of renting it out or charging 
+people to look at it).  For this reason, its economic potential comes exclusively from the possibility of 
+selling it at a profit.  And the person who buys it is likely to be doing so in the hope of selling it to 
+someone else at a still-higher price . . . despite the fact that it won’t produce earnings in the interim.  I 
+think of assets that don’t produce operating cash flow or have the potential to do so in the future as 
+not having earning power, and that makes them impossible to value objectively, analytically, or 
+intrinsically (see my 2010 memo about gold, All That Glitters). 
+Some earning power is current and produces income today.  The result can be seen in this year’s financial 
+statements: the income that today’s assets are producing in their current configuration and under today’s 
+conditions.  Other earning power exists in the form of potential: for example, the income that will be 
+earned when today’s holdings of natural resources are exploited in the future, or the income that will be 
+generated from new products developed by the company’s employees from its intellectual property.  The 
+result will be dependent on the environment that unfolds, which in turn will be influenced by decisions 
+made by company management, competitors, customers, governments, and even investors. 
+Assets can be tangible or intangible, and an asset’s earning power can produce earnings today and 
+also in the future in amounts that might be higher or lower than today.  Together, an asset’s current 
+earnings, plus its power to produce earnings in the future, constitute its key fundamentals.  Some 
+investors emphasize paying a reasonable price for today’s earning power, and others are willing to bet on 
+what they see as potential growth in earning power.  Regardless, I think prudent investing has to be 
+based on judgments regarding an asset’s present and future earning power.  Once an investor has 
+determined an asset’s intrinsic value in this way, he will have a basis for establishing a “right” price 
+that will allow for good returns in the future. 
+Price 
+While value can seem theoretical and ephemeral, price is concrete.  It’s the amount you pay to 
+obtain something.  Ultimately, as indicated above, doing a good job of investing comes down to 
+estimating value appropriately and purchasing that value at a reasonable price.   
+As mentioned above, there are a great many things that combine to make up an asset’s fundamentals.  
+Ultimately, they can be boiled down to its earning power, and it’s from earnings that value is derived.  In 
+2025 Oaktree Capital Management, L.P.
+2
+All Rights Reserved
+
+the late 1960s, I was taught at the University of Chicago Graduate School of Business that the right 
+price for an asset is the discounted present value of its future cash flows or earnings.  You might 
+object: What about all the other things listed above, such as a company’s plant and equipment, intellectual 
+property, and management, and even its reputation? Don’t they have value?  The value of all of these 
+things is derived from their ability to contribute to the company’s earning power, and thus it’s captured in 
+the earnings calculation. 
+The key part of a security analyst’s job consists of arriving at earnings projections.  Then those 
+projections have to be converted into a fair price.  At the University of Chicago, the discounting process 
+was purely mathematical: you divide the earnings for each year in the future by (1+r)n, where r is the 
+appropriate discount rate and n is the number of years out into the future the earnings are, and then you 
+total up the yearly results.  But in the real world, price is set by a different discounting process, which 
+consists mostly of people applying their subjective opinions and attitudes about what the asset and 
+its earning power are worth. 
+So that’s what an asset’s price is: the consensus view of investors regarding its underlying 
+fundamental value.  According to Benjamin Graham, the father of value investing and Warren Buffett’s 
+teacher at Columbia, market prices are set each day by investors who cast their votes by offering to buy or 
+sell.  Some investors think a company has a solid product line and competent management, and others 
+consider it stodgy and outmoded.  Some investors find another company sexy and right for the future, and 
+others think it’s a risky high-flyer.  These attitudes are converted into asset prices.   
+This is where the tug-of-war comes in.  As I see it, every day with regard to every asset, the optimists do 
+battle with the pessimists.  The market throws out, “GM at $52.”  The optimists think it’s worth $58, so 
+they’re happy to buy at $52.  Since the pessimists think it’s only worth $46, they’re willing to 
+accommodate the buyers by selling at $52, and a trade takes place.  But sometimes, one side or the other 
+predominates.  If the people who think it’s worth $58 outnumber the ones who think it’s worth $46, more 
+people will want to buy at $52 than want to sell there, so the price will rise to $53, and maybe $54, and so 
+forth.   
+Just as an imbalance of opinion in one direction or the other can move the price of GM, it can also move a 
+whole market.  Sometimes the overall mood of investors in a market is positive, meaning they’re 
+characterized by optimism, credulousness, fear of missing out (“FOMO”), and risk tolerance.  And 
+sometimes the mood is negative and marked by pessimism, skepticism, fear of loss, and excessive risk 
+aversion.  Whereas in real life things fluctuate between pretty good and not so hot, in the minds of 
+investors things can go from flawless to hopeless and back. 
+When the majority of investors are optimistic, they cause price to rise and potentially exceed value.  
+And when the pessimists reign, they cause price to decline and potentially fall short of value.  Thus, 
+a preponderance of investor psychology on one side or the other – in lieu of the rationality and objectivity 
+on which the Efficient Market Hypothesis is predicated – can create the bargains or over-pricings the 
+hypothesis says can’t exist.  Investors should be on the lookout for them.  
+The price of an asset means nothing in isolation.  You can’t tell whether a car is good buy at $40,000 
+unless you know about the things that determine its market value: its make, model, age, mileage and 
+condition.  It’s the same in investing; what matters is the relationship between an asset’s price and 
+its value.  Investors call that relationship the asset’s “valuation.”   
+2025 Oaktree Capital Management, L.P.
+3
+All Rights Reserved
+
+The Interaction of Price and Value 
+If an asset is bought for the right price (or less), its current earnings can give the buyer a good return on 
+his purchase price while he owns it, and increases in earning power can add to the current return it throws 
+off and increase its value and thus the price at which it can be sold.  Thus, an investor’s ability to earn 
+an attractive return on an investment will largely depend on whether he accurately appraised the 
+investment’s fundamentals and paid an appropriate price for those fundamentals.   
+In the long term, the success of an investment will hinge primarily on whether the buyer was right 
+about the asset’s earning power.  However, an asset’s current earning power and opinions regarding its 
+future earning power usually don’t change much from month to month or even year to year.  Thus, short-
+term investment performance is likely to stem mostly from changes in the price investors are willing 
+to pay for the asset.  That makes price the dominant consideration for anyone whose principal 
+concern is the short run.   
+Value should be thought of as exerting a “magnetic” influence on price.  If price is above value, 
+future price movements are more likely to be downward than upward.  And if price is below value, future 
+price movements are more likely to be upward than downward.  However, in the short run, price can 
+move in just about any direction relative to value.  This is so because an asset’s price at any given 
+point in time is mostly determined by investor psychology, which can be irrational and unpredictable.  
+Thus, while the current relationship of price to underlying value should move in the expected 
+direction, it can only be counted on to do so in the long run at best.   
+“More likely to be” is the key phrase in the above paragraph.  An undervalued asset can remain cheap 
+– or even get cheaper – for a long time, just as an overvalued asset can become more overvalued, and then
+extremely overvalued, and then crazily overvalued.  It’s the ability of price to go to crazy extremes that
+causes bubbles and crashes.  If price always stopped going up when it began to exceed value, we wouldn’t
+have extended bull markets and bubbles (and the ensuing crashes), and vice versa.
+People who bet heavily that price will move in the direction of value – which we call “converging” – can 
+be carried out if they don’t have sufficient staying power.  That’s why John Maynard Keynes said, “The 
+market can remain irrational longer than you can remain solvent.”  It’s intellectually sound to expect 
+price to move toward value rather than diverge further from it, and even to bet that it will happen, 
+but it’s unwise and potentially dangerous to bet heavily that it’ll happen soon.   
+As Benjamin Graham said, in the short run the market functions like a voting machine, reflecting assets’ 
+popularity.  But in the long run, it’s a weighing machine, assessing assets’ value.  Thus, we can think in 
+terms of a “calculus of value” that I find entirely logical and almost mathematical . . . except for the 
+fact that it’s applied by people who aren’t: 
+•
+Value is what you get when you make an investment, and price is what you pay for it.
+•
+A good investment is one in which the price is right for what the value turns out to be.
+•
+Due to the volatile nature of investor psychology, asset prices fluctuate much more than
+fundamental value.
+•
+Thus, most price changes reflect changes in investor psychology rather than changes in
+fundamental value.
+•
+Because of the key role psychology plays in setting asset prices, in order to have a sense for
+where price stands relative to value, investors should try to gauge prevailing psychology, not just
+quantitative valuation parameters.
+2025 Oaktree Capital Management, L.P.
+4
+All Rights Reserved
+
+•
+The relationship of price to value should be expected to strongly influence investment
+performance, with high v
