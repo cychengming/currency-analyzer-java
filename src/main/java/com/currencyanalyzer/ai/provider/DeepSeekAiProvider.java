@@ -43,7 +43,7 @@ public class DeepSeekAiProvider implements AiProvider {
         this.httpClient = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(10))
             .build();
-        this.baseUrl = baseUrl.replaceAll("/+$", "");
+        this.baseUrl = withoutTrailingSlashes(baseUrl);
         this.apiKey = apiKey;
         this.model = model;
         this.requestTimeout = Duration.ofSeconds(requestTimeoutSeconds);
@@ -227,5 +227,13 @@ public class DeepSeekAiProvider implements AiProvider {
         } catch (IOException exception) {
             throw new AiProviderException("DeepSeek returned an invalid streaming response", exception);
         }
+    }
+
+    private static String withoutTrailingSlashes(String value) {
+        int end = value.length();
+        while (end > 0 && value.charAt(end - 1) == '/') {
+            end--;
+        }
+        return value.substring(0, end);
     }
 }

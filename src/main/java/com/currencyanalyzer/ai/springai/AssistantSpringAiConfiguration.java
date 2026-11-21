@@ -39,7 +39,7 @@ public class AssistantSpringAiConfiguration {
         requestFactory.setReadTimeout(Duration.ofSeconds(timeoutSeconds));
         HttpClient httpClient = HttpClient.create().responseTimeout(Duration.ofSeconds(timeoutSeconds));
         DeepSeekApi api = DeepSeekApi.builder()
-            .baseUrl(baseUrl.replaceAll("/+$", ""))
+            .baseUrl(withoutTrailingSlashes(baseUrl))
             .apiKey(apiKey)
             .restClientBuilder(RestClient.builder().requestFactory(requestFactory))
             .webClientBuilder(WebClient.builder().clientConnector(new ReactorClientHttpConnector(httpClient)))
@@ -50,6 +50,14 @@ public class AssistantSpringAiConfiguration {
             .enableThinking()
             .build();
         return DeepSeekChatModel.builder().deepSeekApi(api).options(options).build();
+    }
+
+    private static String withoutTrailingSlashes(String value) {
+        int end = value.length();
+        while (end > 0 && value.charAt(end - 1) == '/') {
+            end--;
+        }
+        return value.substring(0, end);
     }
 
     @Bean

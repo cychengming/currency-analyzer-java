@@ -69,6 +69,7 @@ class AssistantToolsTests {
     void omitsSecretSettings() {
         assertTrue(AssistantTools.secretSetting("smtp_password"));
         assertTrue(AssistantTools.secretSetting("deepseek_api_key"));
+        assertTrue(AssistantTools.secretSetting("api-key"));
         assertFalse(AssistantTools.secretSetting("alert_email"));
     }
 }

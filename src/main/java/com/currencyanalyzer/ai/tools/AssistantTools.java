@@ -321,7 +321,13 @@ public class AssistantTools {
         if (key == null || key.isBlank()) {
             return true;
         }
-        return key.toLowerCase(Locale.ROOT).matches(".*(password|secret|token|api[-_]?key|credential).*");
+        String normalized = key.toLowerCase(Locale.ROOT).replace('-', '_');
+        return normalized.contains("password")
+            || normalized.contains("secret")
+            || normalized.contains("token")
+            || normalized.contains("api_key")
+            || normalized.contains("apikey")
+            || normalized.contains("credential");
     }
 
     private String searchNotes(JsonNode arguments) {
