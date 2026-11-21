@@ -262,9 +262,9 @@ public class SpringAiChatRunner {
                 return;
             }
             for (AssistantMessage.ToolCall call : incoming) {
-                String id = call.id() == null ? "" : call.id();
-                String name = call.name() == null ? "" : call.name();
-                String arguments = call.arguments() == null ? "" : call.arguments();
+                String id = call.id();
+                String name = call.name();
+                String arguments = call.arguments();
                 if (!id.isBlank() && (calls.isEmpty() || !id.equals(calls.getLast().id))) {
                     calls.add(new Call(id, name, new StringBuilder(arguments)));
                 } else if (!calls.isEmpty()) {
