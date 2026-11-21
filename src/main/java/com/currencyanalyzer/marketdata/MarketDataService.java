@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import com.github.benmanes.caffeine.cache.Ticker;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.client.JdkClientHttpRequestFactory;
@@ -57,35 +58,43 @@ public class MarketDataService {
     private final ObjectMapper objectMapper;
     private final Clock clock;
     private final List<String> configuredPairs;
+    private final LiveRateCache liveRateCache;
 
     @Autowired
     public MarketDataService(
         RestClient.Builder restClientBuilder,
         Clock clock,
-        @Value("${app.market.pairs:}") String pairs
+        @Value("${app.market.pairs:}") String pairs,
+        @Value("${app.market.live-cache-ttl-seconds:60}") long liveCacheTtlSeconds
     ) {
-        HttpClient httpClient = HttpClient.newBuilder()
-            .connectTimeout(Duration.ofSeconds(5))
-            .followRedirects(HttpClient.Redirect.NORMAL)
-            .build();
-        JdkClientHttpRequestFactory requestFactory = new JdkClientHttpRequestFactory(httpClient);
-        requestFactory.setReadTimeout(Duration.ofSeconds(12));
-        this.restClient = restClientBuilder.requestFactory(requestFactory).build();
-        this.objectMapper = new ObjectMapper();
-        this.clock = clock;
-        this.configuredPairs = parseConfiguredPairs(pairs);
+        this(
+            buildRestClient(restClientBuilder),
+            clock,
+            parseConfiguredPairs(pairs),
+            new LiveRateCache(Duration.ofSeconds(liveCacheTtlSeconds), Ticker.systemTicker())
+        );
     }
 
-    MarketDataService(RestClient restClient, Clock clock, List<String> configuredPairs) {
+    MarketDataService(
+        RestClient restClient,
+        Clock clock,
+        List<String> configuredPairs,
+        LiveRateCache liveRateCache
+    ) {
         this.restClient = restClient;
         this.objectMapper = new ObjectMapper();
         this.clock = clock;
         this.configuredPairs = configuredPairs.stream()
             .map(MarketDataService::normalizePair)
             .toList();
+        this.liveRateCache = liveRateCache;
     }
 
     public Map<String, LiveRate> fetchLiveRates() {
+        return liveRateCache.get(this::loadLiveRates);
+    }
+
+    private Map<String, LiveRate> loadLiveRates() {
         Map<String, LiveRate> rates = new LinkedHashMap<>();
         rates.putAll(fetchCommodityRates());
         rates.putAll(fetchFxRates());
@@ -98,6 +107,16 @@ public class MarketDataService {
             }
         }
         return ordered;
+    }
+
+    private static RestClient buildRestClient(RestClient.Builder restClientBuilder) {
+        HttpClient httpClient = HttpClient.newBuilder()
+            .connectTimeout(Duration.ofSeconds(5))
+            .followRedirects(HttpClient.Redirect.NORMAL)
+            .build();
+        JdkClientHttpRequestFactory requestFactory = new JdkClientHttpRequestFactory(httpClient);
+        requestFactory.setReadTimeout(Duration.ofSeconds(12));
+        return restClientBuilder.requestFactory(requestFactory).build();
     }
 
     public List<HistoricalPoint> fetchHistorical(String requestedPair, int requestedDays) {
@@ -122,14 +141,21 @@ public class MarketDataService {
     }
 
     private Map<String, LiveRate> fetchCommodityRates() {
-        Map<String, LiveRate> rates = new LinkedHashMap<>();
-        if (COMMODITY_SYMBOLS.isEmpty()) {
-            return rates;
+        Map<String, String> symbols = new LinkedHashMap<>();
+        for (String pair : configuredPairs) {
+            String symbol = COMMODITY_SYMBOLS.get(pair);
+            if (symbol != null) {
+                symbols.put(pair, symbol);
+            }
+        }
+        if (symbols.isEmpty()) {
+            return Map.of();
         }
 
+        Map<String, LiveRate> rates = new LinkedHashMap<>();
         try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
             Map<String, Future<Optional<LiveRate>>> tasks = new LinkedHashMap<>();
-            COMMODITY_SYMBOLS.forEach((pair, symbol) ->
+            symbols.forEach((pair, symbol) ->
                 tasks.put(pair, executor.submit(() -> fetchYahooLiveRate(symbol))));
 
             tasks.forEach((pair, task) -> {

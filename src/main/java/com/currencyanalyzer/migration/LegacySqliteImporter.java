@@ -56,9 +56,8 @@ public class LegacySqliteImporter implements ApplicationRunner {
 
     @Override
     public void run(ApplicationArguments args) {
-        String source = args.getOptionValues("source") == null || args.getOptionValues("source").isEmpty()
-            ? null
-            : args.getOptionValues("source").getFirst();
+        List<String> sources = args.getOptionValues("source");
+        String source = sources == null || sources.isEmpty() ? null : sources.getFirst();
 
         if (source == null || source.isBlank()) {
             throw new IllegalArgumentException("Usage: --app.legacy-import.enabled=true --source=/path/to/currency_monitor.db");
@@ -380,6 +379,11 @@ public class LegacySqliteImporter implements ApplicationRunner {
             return resultSet.wasNull() ? defaultValue : value;
         }
 
+        Integer nullableInteger(String column) throws SQLException {
+            int value = resultSet.getInt(column);
+            return resultSet.wasNull() ? null : value;
+        }
+
         boolean booleanValue(String column, boolean defaultValue) throws SQLException {
             int value = resultSet.getInt(column);
             return resultSet.wasNull() ? defaultValue : value != 0;
@@ -400,8 +404,8 @@ public class LegacySqliteImporter implements ApplicationRunner {
     }
 
     private static void setNullableInteger(BoundRow row, int index, String column) throws SQLException {
-        int value = row.resultSet().getInt(column);
-        if (row.resultSet().wasNull()) {
+        Integer value = row.nullableInteger(column);
+        if (value == null) {
             row.setObject(index, null);
         } else {
             row.setInt(index, value);
