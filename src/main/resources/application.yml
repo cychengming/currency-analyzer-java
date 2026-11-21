@@ -59,6 +59,10 @@ app:
     deepseek:
       base-url: ${DEEPSEEK_BASE_URL:https://api.deepseek.com}
       api-key: ${DEEPSEEK_API_KEY:}
+    knowledge:
+      enabled: ${AI_KNOWLEDGE_ENABLED:true}
+      max-notes: ${AI_KNOWLEDGE_MAX_NOTES:4}
+      max-chars: ${AI_KNOWLEDGE_MAX_CHARS:4000}
   market:
     pairs: ${MARKET_PAIRS:}
     # Matches the dashboard refresh interval. Concurrent viewers share one upstream fetch.

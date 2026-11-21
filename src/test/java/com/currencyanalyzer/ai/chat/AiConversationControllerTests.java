@@ -14,6 +14,11 @@ import org.springframework.context.annotation.Primary;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 
+import java.util.List;
+import java.util.concurrent.atomic.AtomicReference;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
@@ -143,13 +148,46 @@ class AiConversationControllerTests {
             .andExpect(jsonPath("$[1].content").value("Reply from test provider."));
     }
 
+    @Test
+    void attachesMatchingKnowledgeNotesToTheProviderPrompt() throws Exception {
+        MvcResult created = mockMvc.perform(post("/api/ai/conversations")
+                .with(user("knowledge-user"))
+                .with(csrf()))
+            .andExpect(status().isCreated())
+            .andReturn();
+        String id = JsonMapper.builder().build()
+            .readTree(created.getResponse().getContentAsString())
+            .get("id").asText();
+
+        MvcResult pendingResponse = mockMvc.perform(post("/api/ai/conversations/{id}/messages", id)
+                .with(user("knowledge-user"))
+                .with(csrf())
+                .contentType("application/json")
+                .accept("text/event-stream")
+                .content("{\"message\":\"请用凯利公式解释仓位\"}"))
+            .andExpect(request().asyncStarted())
+            .andReturn();
+
+        mockMvc.perform(asyncDispatch(pendingResponse))
+            .andExpect(status().isOk());
+
+        List<AiProvider.Message> prompt = FakeProviderConfiguration.lastPrompt.get();
+        assertEquals("system", prompt.getFirst().role());
+        assertTrue(prompt.getFirst().content().contains("## 凯利公式"));
+        assertEquals("user", prompt.get(1).role());
+        assertEquals("请用凯利公式解释仓位", prompt.get(1).content());
+    }
+
     @TestConfiguration
     static class FakeProviderConfiguration {
+
+        static final AtomicReference<List<AiProvider.Message>> lastPrompt = new AtomicReference<>(List.of());
 
         @Bean
         @Primary
         AiProvider fakeAiProvider() {
             return (messages, onText, isCancelled) -> {
+                lastPrompt.set(List.copyOf(messages));
                 if (!isCancelled.getAsBoolean()) {
                     onText.accept("Reply from test provider.");
                 }

@@ -1,5 +1,7 @@
 package com.currencyanalyzer.ai.chat;
 
+import com.currencyanalyzer.ai.knowledge.AssistantPrompt;
+import com.currencyanalyzer.ai.knowledge.KnowledgeRetriever;
 import com.currencyanalyzer.ai.provider.AiProvider;
 import com.currencyanalyzer.ai.provider.AiProviderException;
 import jakarta.annotation.PreDestroy;
@@ -13,6 +15,7 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.io.IOException;
 import java.time.Clock;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -30,27 +33,39 @@ public class AiConversationService {
 
     private final AiConversationRepository conversationRepository;
     private final AiProvider aiProvider;
+    private final KnowledgeRetriever knowledgeRetriever;
     private final Clock clock;
     private final String provider;
     private final String model;
     private final int maxInputChars;
+    private final boolean knowledgeEnabled;
+    private final int knowledgeMaxNotes;
+    private final int knowledgeMaxChars;
     private final ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
     private final ConcurrentHashMap<UUID, ActiveResponse> activeResponses = new ConcurrentHashMap<>();
 
     public AiConversationService(
         AiConversationRepository conversationRepository,
         AiProvider aiProvider,
+        KnowledgeRetriever knowledgeRetriever,
         Clock clock,
         @Value("${app.ai.provider:deepseek}") String provider,
         @Value("${app.ai.model:deepseek-flash}") String model,
-        @Value("${app.ai.max-input-chars:8000}") int maxInputChars
+        @Value("${app.ai.max-input-chars:8000}") int maxInputChars,
+        @Value("${app.ai.knowledge.enabled:true}") boolean knowledgeEnabled,
+        @Value("${app.ai.knowledge.max-notes:4}") int knowledgeMaxNotes,
+        @Value("${app.ai.knowledge.max-chars:4000}") int knowledgeMaxChars
     ) {
         this.conversationRepository = conversationRepository;
         this.aiProvider = aiProvider;
+        this.knowledgeRetriever = knowledgeRetriever;
         this.clock = clock;
         this.provider = provider;
         this.model = model;
         this.maxInputChars = maxInputChars;
+        this.knowledgeEnabled = knowledgeEnabled;
+        this.knowledgeMaxNotes = knowledgeMaxNotes;
+        this.knowledgeMaxChars = knowledgeMaxChars;
     }
 
     @Transactional
@@ -150,7 +165,10 @@ public class AiConversationService {
             List<AiProvider.Message> history = conversationRepository.findRecentMessages(conversationId).stream()
                 .map(message -> new AiProvider.Message(message.role(), message.content()))
                 .toList();
-            aiProvider.stream(history, delta -> {
+            List<AiProvider.Message> prompt = new ArrayList<>(history.size() + 1);
+            prompt.add(new AiProvider.Message("system", systemMessage(latestUserMessage(history))));
+            prompt.addAll(history);
+            aiProvider.stream(prompt, delta -> {
                 if (activeResponse.cancelled.get() || delta.isEmpty()) {
                     return;
                 }
@@ -204,6 +222,26 @@ public class AiConversationService {
 
     private void finishResponse(UUID conversationId, ActiveResponse activeResponse) {
         activeResponses.remove(conversationId, activeResponse);
+    }
+
+    private String systemMessage(String userMessage) {
+        if (!knowledgeEnabled) {
+            return AssistantPrompt.systemMessage(List.of(), 0);
+        }
+        return AssistantPrompt.systemMessage(
+            knowledgeRetriever.retrieve(userMessage, knowledgeMaxNotes),
+            knowledgeMaxChars
+        );
+    }
+
+    private static String latestUserMessage(List<AiProvider.Message> history) {
+        for (int index = history.size() - 1; index >= 0; index--) {
+            AiProvider.Message message = history.get(index);
+            if ("user".equals(message.role())) {
+                return message.content();
+            }
+        }
+        return "";
     }
 
     private static void sendEvent(SseEmitter emitter, String eventName, Object data) {
