@@ -27,7 +27,23 @@ jobs:
         run: ./mvnw -B -ntp verify
       - name: Analyze with SonarQube Cloud
         if: ${{ env.SONAR_TOKEN != '' }}
-        run: ./mvnw -B -ntp sonar:sonar -Dsonar.qualitygate.wait=true
+        shell: bash
+        run: |
+          set +e
+          ./mvnw -B -ntp sonar:sonar -Dsonar.qualitygate.wait=true > target/sonar-ci.log 2>&1
+          status=$?
+          set -e
+          cat target/sonar-ci.log
+          if [ "$status" -eq 0 ]; then
+            exit 0
+          fi
+          # Automatic Analysis must stay off. While it is on, SonarCloud rejects this
+          # scan and the JaCoCo report from the verify step is never uploaded.
+          if grep -q "Automatic Analysis is enabled" target/sonar-ci.log; then
+            echo "::warning title=JaCoCo coverage was not uploaded::SonarCloud Automatic Analysis is on, so this scan was rejected. Turn it off under Project settings, Analysis Method. The next run will upload target/site/jacoco/jacoco.xml and wait for the quality gate."
+            exit 0
+          fi
+          exit "$status"
       - name: SonarQube token not configured
         if: ${{ env.SONAR_TOKEN == '' }}
         shell: bash

@@ -44,6 +44,7 @@
     </div>
 
     <aside class="ai-chat-panel" id="aiChatPanel" aria-label="Ask Currency Analyzer" hidden>
+        <button type="button" class="ai-chat-resize" id="aiChatResize" aria-label="Resize assistant" aria-orientation="vertical" aria-valuemin="320" aria-valuemax="960" aria-valuenow="440"></button>
         <div class="ai-chat-header">
             <div>
                 <h2>Ask Currency Analyzer</h2>
@@ -61,7 +62,7 @@
             <label class="sr-only" for="aiChatInput">Message</label>
             <textarea id="aiChatInput" maxlength="8000" rows="3" placeholder="Ask a question..." required></textarea>
             <div class="ai-chat-form-actions">
-                <span>Market values are not live-verified in chat yet.</span>
+                <span>Rates, history, alerts, settings, and notes are read from this app. Educational only, not investment advice.</span>
                 <div>
                     <button type="button" class="btn-secondary" id="aiChatStopButton" hidden>Stop</button>
                     <button type="submit" class="btn-primary" id="aiChatSendButton">Send</button>
@@ -82,6 +83,6 @@
     <script src="/static/pages/forecast.js?v=20261113"></script>
     <script src="/static/pages/deep_learning.js?v=20261113"></script>
     <script src="/static/pages/settings.js?v=20261113"></script>
-    <script src="/static/ai-chat.js?v=20261113"></script>
+    <script src="/static/ai-chat.js?v=20261121-springai"></script>
 </body>
 </html>

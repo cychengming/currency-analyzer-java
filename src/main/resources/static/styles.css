@@ -988,11 +988,29 @@ textarea[disabled] {
     z-index: 1100;
     display: flex;
     flex-direction: column;
-    width: min(440px, 100vw);
+    width: min(var(--ai-chat-width, 440px), 100vw);
     padding: 18px;
     background: var(--bg-elevated);
     border-left: 1px solid var(--border);
     box-shadow: var(--shadow-lg);
+}
+
+.ai-chat-resize {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: 10px;
+    transform: translateX(-50%);
+    padding: 0;
+    border: 0;
+    background: transparent;
+    cursor: ew-resize;
+}
+
+.ai-chat-resize:hover,
+.ai-chat-resize:focus-visible {
+    background: var(--accent);
 }
 
 .ai-chat-panel[hidden],
@@ -1068,6 +1086,25 @@ textarea[disabled] {
     background: var(--surface);
 }
 
+.ai-chat-thought {
+    margin-bottom: 8px;
+    color: var(--text-muted);
+    font-size: 12px;
+}
+
+.ai-chat-thought[hidden] {
+    display: none;
+}
+
+.ai-chat-thought summary {
+    cursor: pointer;
+}
+
+.ai-chat-thought-body {
+    margin-top: 6px;
+    white-space: pre-wrap;
+}
+
 .ai-chat-error {
     padding: 10px;
     color: var(--danger);
@@ -1082,6 +1119,8 @@ textarea[disabled] {
 
 .ai-chat-form textarea {
     width: 100%;
+    min-height: 72px;
+    max-height: 40vh;
     resize: vertical;
     padding: 10px;
     color: var(--text);

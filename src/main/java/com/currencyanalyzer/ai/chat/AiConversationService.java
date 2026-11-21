@@ -1,7 +1,14 @@
 package com.currencyanalyzer.ai.chat;
 
+import com.currencyanalyzer.ai.knowledge.AssistantPrompt;
+import com.currencyanalyzer.ai.knowledge.KnowledgeRetriever;
 import com.currencyanalyzer.ai.provider.AiProvider;
+import com.currencyanalyzer.ai.provider.AiProvider.Completion;
+import com.currencyanalyzer.ai.provider.AiProvider.ToolCall;
+import com.currencyanalyzer.ai.provider.AiProvider.Turn;
 import com.currencyanalyzer.ai.provider.AiProviderException;
+import com.currencyanalyzer.ai.springai.SpringAiChatRunner;
+import com.currencyanalyzer.ai.tools.AssistantTools;
 import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -13,6 +20,7 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.io.IOException;
 import java.time.Clock;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -28,29 +36,50 @@ public class AiConversationService {
 
     private static final Logger log = LoggerFactory.getLogger(AiConversationService.class);
 
+    private static final int MAX_TOOL_ROUNDS = 3;
+    private static final int MAX_TOOL_CALLS_PER_ROUND = 4;
+
     private final AiConversationRepository conversationRepository;
     private final AiProvider aiProvider;
+    private final AssistantTools assistantTools;
+    private final SpringAiChatRunner springAiChatRunner;
+    private final KnowledgeRetriever knowledgeRetriever;
     private final Clock clock;
     private final String provider;
     private final String model;
     private final int maxInputChars;
+    private final boolean knowledgeEnabled;
+    private final int knowledgeMaxNotes;
+    private final int knowledgeMaxChars;
     private final ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
     private final ConcurrentHashMap<UUID, ActiveResponse> activeResponses = new ConcurrentHashMap<>();
 
     public AiConversationService(
         AiConversationRepository conversationRepository,
         AiProvider aiProvider,
+        AssistantTools assistantTools,
+        SpringAiChatRunner springAiChatRunner,
+        KnowledgeRetriever knowledgeRetriever,
         Clock clock,
         @Value("${app.ai.provider:deepseek}") String provider,
         @Value("${app.ai.model:deepseek-flash}") String model,
-        @Value("${app.ai.max-input-chars:8000}") int maxInputChars
+        @Value("${app.ai.max-input-chars:8000}") int maxInputChars,
+        @Value("${app.ai.knowledge.enabled:true}") boolean knowledgeEnabled,
+        @Value("${app.ai.knowledge.max-notes:4}") int knowledgeMaxNotes,
+        @Value("${app.ai.knowledge.max-chars:4000}") int knowledgeMaxChars
     ) {
         this.conversationRepository = conversationRepository;
         this.aiProvider = aiProvider;
+        this.assistantTools = assistantTools;
+        this.springAiChatRunner = springAiChatRunner;
+        this.knowledgeRetriever = knowledgeRetriever;
         this.clock = clock;
         this.provider = provider;
         this.model = model;
         this.maxInputChars = maxInputChars;
+        this.knowledgeEnabled = knowledgeEnabled;
+        this.knowledgeMaxNotes = knowledgeMaxNotes;
+        this.knowledgeMaxChars = knowledgeMaxChars;
     }
 
     @Transactional
@@ -142,26 +171,52 @@ public class AiConversationService {
 
     private void generateResponse(UUID conversationId, ActiveResponse activeResponse, UUID userMessageId) {
         StringBuilder responseText = new StringBuilder();
+        StringBuilder reasoningText = new StringBuilder();
         try {
             sendEvent(activeResponse.emitter, "message_started", Map.of(
                 "user_message_id", userMessageId.toString()
             ));
 
-            List<AiProvider.Message> history = conversationRepository.findRecentMessages(conversationId).stream()
-                .map(message -> new AiProvider.Message(message.role(), message.content()))
-                .toList();
-            aiProvider.stream(history, delta -> {
-                if (activeResponse.cancelled.get() || delta.isEmpty()) {
-                    return;
+            List<AiConversationRepository.AiProviderMessage> history =
+                conversationRepository.findRecentMessages(conversationId);
+            List<ToolTrace> toolTraces = new ArrayList<>();
+            if (springAiChatRunner.available()) {
+                answerWithSpringAi(history, activeResponse, responseText, reasoningText, toolTraces);
+            } else {
+                List<Turn> prompt = new ArrayList<>(history.size() + 1);
+                prompt.add(Turn.text("system", systemMessage(latestUserText(history))));
+                history.forEach(message -> prompt.add(historyTurn(message)));
+                boolean usedTools = answerWithTools(
+                    conversationId, activeResponse, prompt, responseText, reasoningText, toolTraces
+                );
+                if (!usedTools && responseText.isEmpty() && !activeResponse.cancelled.get()) {
+                    aiProvider.stream(
+                        historyWithSystem(prompt),
+                        delta -> appendDelta(activeResponse, responseText, delta),
+                        delta -> appendReasoning(activeResponse, reasoningText, delta),
+                        activeResponse.cancelled::get
+                    );
                 }
-                responseText.append(delta);
-                sendEvent(activeResponse.emitter, "text_delta", Map.of("text", delta));
-            }, activeResponse.cancelled::get);
+                if (responseText.isEmpty() && !activeResponse.cancelled.get()) {
+                    retryWithoutThinking(activeResponse, prompt, responseText, reasoningText);
+                }
+            }
 
             if (!activeResponse.cancelled.get() && !responseText.isEmpty()) {
                 AiMessage assistantMessage = conversationRepository.addAssistantMessage(
-                    conversationId, responseText.toString(), clock.instant()
+                    conversationId, responseText.toString(), reasoningText.toString(), clock.instant()
                 );
+                for (ToolTrace toolTrace : toolTraces) {
+                    conversationRepository.addToolInvocation(
+                        assistantMessage.id(),
+                        toolTrace.name(),
+                        toolTrace.argumentsJson(),
+                        toolTrace.summaryJson(),
+                        toolTrace.status(),
+                        toolTrace.durationMs(),
+                        clock.instant()
+                    );
+                }
                 sendEvent(activeResponse.emitter, "message_completed", Map.of(
                     "message_id", assistantMessage.id().toString(),
                     "finish_reason", "completed"
@@ -206,12 +261,213 @@ public class AiConversationService {
         activeResponses.remove(conversationId, activeResponse);
     }
 
+    private void retryWithoutThinking(
+        ActiveResponse activeResponse,
+        List<Turn> prompt,
+        StringBuilder responseText,
+        StringBuilder reasoningText
+    ) {
+        log.warn("DeepSeek produced no answer text. Retrying with thinking disabled.");
+        List<AiProvider.Message> retry = new ArrayList<>(historyWithSystem(prompt));
+        retry.add(new AiProvider.Message("user", "Write the final answer now. Do not leave it blank."));
+        aiProvider.stream(
+            retry,
+            delta -> appendDelta(activeResponse, responseText, delta),
+            delta -> appendReasoning(activeResponse, reasoningText, delta),
+            activeResponse.cancelled::get,
+            false
+        );
+    }
+
+    private void answerWithSpringAi(
+        List<AiConversationRepository.AiProviderMessage> history,
+        ActiveResponse activeResponse,
+        StringBuilder responseText,
+        StringBuilder reasoningText,
+        List<ToolTrace> toolTraces
+    ) {
+        List<SpringAiChatRunner.PriorMessage> prior = history.stream()
+            .map(message -> new SpringAiChatRunner.PriorMessage(message.role(), message.content(), message.reasoning()))
+            .toList();
+        springAiChatRunner.answer(
+            systemMessage(latestUserText(history)),
+            prior,
+            new SpringAiChatRunner.StreamListener() {
+                @Override
+                public void onText(String delta) {
+                    appendDelta(activeResponse, responseText, delta);
+                }
+
+                @Override
+                public void onReasoning(String delta) {
+                    appendReasoning(activeResponse, reasoningText, delta);
+                }
+
+                @Override
+                public void onToolStarted(String name) {
+                    sendEvent(activeResponse.emitter, "tool_started", Map.of("tool", name));
+                }
+
+                @Override
+                public void onToolFinished(String name, String argumentsJson, String result, int durationMs) {
+                    boolean failed = result != null && result.startsWith("{\"error\"");
+                    toolTraces.add(new ToolTrace(
+                        name,
+                        truncate(argumentsJson, 2000),
+                        failed ? "error" : "ok",
+                        durationMs,
+                        failed ? "{\"status\":\"error\"}" : "{\"status\":\"ok\"}"
+                    ));
+                    sendEvent(activeResponse.emitter, "tool_completed", Map.of(
+                        "tool", name,
+                        "status", failed ? "error" : "ok"
+                    ));
+                }
+            },
+            activeResponse.cancelled::get
+        );
+    }
+
+    private boolean answerWithTools(
+        UUID conversationId,
+        ActiveResponse activeResponse,
+        List<Turn> prompt,
+        StringBuilder responseText,
+        StringBuilder reasoningText,
+        List<ToolTrace> toolTraces
+    ) {
+        boolean usedTools = false;
+        for (int round = 0; round < MAX_TOOL_ROUNDS && !activeResponse.cancelled.get(); round++) {
+            boolean forceAnswer = usedTools && round == MAX_TOOL_ROUNDS - 1;
+            Completion completion = aiProvider.complete(
+                prompt,
+                forceAnswer ? List.of() : assistantTools.definitions(),
+                activeResponse.cancelled::get
+            );
+            appendReasoning(activeResponse, reasoningText, completion.reasoning());
+            appendDelta(activeResponse, responseText, completion.content());
+            if (!completion.hasToolCalls() || forceAnswer) {
+                return usedTools || responseText.length() > 0;
+            }
+            usedTools = true;
+            List<ToolCall> calls = completion.toolCalls();
+            int accepted = Math.min(calls.size(), MAX_TOOL_CALLS_PER_ROUND);
+            prompt.add(Turn.toolRequest(completion.content(), completion.reasoning(), calls.subList(0, accepted)));
+            for (int index = 0; index < calls.size(); index++) {
+                ToolCall call = calls.get(index);
+                if (index >= accepted) {
+                    prompt.add(Turn.toolResult(call.id(), "{\"error\":\"Too many tool calls in one step.\"}"));
+                    continue;
+                }
+                prompt.add(executeTool(conversationId, activeResponse, call, toolTraces));
+            }
+        }
+        if (usedTools && responseText.isEmpty() && !activeResponse.cancelled.get()) {
+            Completion completion = aiProvider.complete(prompt, List.of(), activeResponse.cancelled::get);
+            appendReasoning(activeResponse, reasoningText, completion.reasoning());
+            appendDelta(activeResponse, responseText, completion.content());
+        }
+        return usedTools || responseText.length() > 0;
+    }
+
+    private Turn executeTool(
+        UUID conversationId,
+        ActiveResponse activeResponse,
+        ToolCall call,
+        List<ToolTrace> toolTraces
+    ) {
+        sendEvent(activeResponse.emitter, "tool_started", Map.of("tool", call.name()));
+        long startedAt = System.nanoTime();
+        String result = assistantTools.execute(call.name(), call.argumentsJson());
+        int durationMs = (int) Math.min(Integer.MAX_VALUE, (System.nanoTime() - startedAt) / 1_000_000);
+        boolean failed = result.startsWith("{\"error\"");
+        toolTraces.add(new ToolTrace(
+            call.name(),
+            truncate(call.argumentsJson(), 2000),
+            failed ? "error" : "ok",
+            durationMs,
+            failed ? "{\"status\":\"error\"}" : "{\"status\":\"ok\"}"
+        ));
+        sendEvent(activeResponse.emitter, "tool_completed", Map.of(
+            "tool", call.name(),
+            "status", failed ? "error" : "ok"
+        ));
+        log.debug("Tool {} finished for conversation {} in {} ms", call.name(), conversationId, durationMs);
+        return Turn.toolResult(call.id(), result);
+    }
+
+    private void appendReasoning(ActiveResponse activeResponse, StringBuilder reasoningText, String delta) {
+        if (activeResponse.cancelled.get() || delta == null || delta.isEmpty()) {
+            return;
+        }
+        reasoningText.append(delta);
+        sendEvent(activeResponse.emitter, "reasoning_delta", Map.of("text", delta));
+    }
+
+    private static Turn historyTurn(AiConversationRepository.AiProviderMessage message) {
+        if ("assistant".equals(message.role()) && message.reasoning() != null && !message.reasoning().isBlank()) {
+            return Turn.assistant(message.content(), message.reasoning());
+        }
+        return Turn.text(message.role(), message.content());
+    }
+
+    private void appendDelta(ActiveResponse activeResponse, StringBuilder responseText, String delta) {
+        if (activeResponse.cancelled.get() || delta == null || delta.isEmpty()) {
+            return;
+        }
+        responseText.append(delta);
+        sendEvent(activeResponse.emitter, "text_delta", Map.of("text", delta));
+    }
+
+    private static List<AiProvider.Message> historyWithSystem(List<Turn> prompt) {
+        return prompt.stream()
+            .filter(turn -> turn.toolCalls().isEmpty() && turn.toolCallId() == null)
+            .map(turn -> new AiProvider.Message(turn.role(), turn.content()))
+            .toList();
+    }
+
+    private static String truncate(String value, int maxChars) {
+        if (value == null || value.length() <= maxChars) {
+            return value == null ? "{}" : value;
+        }
+        return value.substring(0, maxChars);
+    }
+
+    private String systemMessage(String userMessage) {
+        if (!knowledgeEnabled) {
+            return AssistantPrompt.systemMessage(List.of(), 0);
+        }
+        return AssistantPrompt.systemMessage(
+            knowledgeRetriever.retrieve(userMessage, knowledgeMaxNotes),
+            knowledgeMaxChars
+        );
+    }
+
+    private static String latestUserText(List<AiConversationRepository.AiProviderMessage> history) {
+        for (int index = history.size() - 1; index >= 0; index--) {
+            AiConversationRepository.AiProviderMessage message = history.get(index);
+            if ("user".equals(message.role())) {
+                return message.content();
+            }
+        }
+        return "";
+    }
+
     private static void sendEvent(SseEmitter emitter, String eventName, Object data) {
         try {
             emitter.send(SseEmitter.event().name(eventName).data(data, MediaType.APPLICATION_JSON));
         } catch (IOException exception) {
             throw new IllegalStateException("Unable to write the assistant response stream", exception);
         }
+    }
+
+    private record ToolTrace(
+        String name,
+        String argumentsJson,
+        String status,
+        int durationMs,
+        String summaryJson
+    ) {
     }
 
     private static final class ActiveResponse {

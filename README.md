@@ -6,7 +6,7 @@ The application is being migrated from the existing Flask implementation while p
 
 ## Current foundation
 
-- Java 25 with Spring Boot 4.0.1
+- Java 25 with Spring Boot 4.1.2
 - PostgreSQL with Flyway schema management
 - Spring Security sessions, versioned PBKDF2 password storage, and legacy Flask PBKDF2 compatibility
 - Existing static frontend copied into `src/main/resources/static`
@@ -30,7 +30,7 @@ The `verify` phase writes JaCoCo coverage reports to `target/site/jacoco`.
 
 ### AI assistant (early access)
 
-The assistant is disabled unless `AI_ASSISTANT_ENABLED=true` is set. To enable DeepSeek-backed streaming chat, configure the server environment with:
+The assistant is disabled unless `AI_ASSISTANT_ENABLED=true` is set. To enable DeepSeek-backed streaming chat through Spring AI, configure the server environment with:
 
 ```text
 AI_ASSISTANT_ENABLED=true
@@ -38,7 +38,9 @@ DEEPSEEK_API_KEY=<server-side API key>
 DEEPSEEK_MODEL=deepseek-flash
 ```
 
-The API key is never sent to the browser. The current assistant can explain general concepts but does not yet have market-data tools; it must not be used for live prices, alerts, forecasts, or backtest results. Responses are educational and not investment advice. Chat text is stored in PostgreSQL under the owning account.
+The API key is never sent to the browser. Spring AI calls DeepSeek and exposes read-only tools for cached live rates, up to a year of daily history, a comparison of two pairs, recorded alerts, alert rules, monitoring state, non-secret settings, and a stored forecast. It quotes those tool results and does not invent prices. Responses are educational and not investment advice. Chat text, the model's reasoning, and tool-call records are stored in PostgreSQL under the owning account.
+
+Notes are searched by meaning with a local multilingual embedding model (`paraphrase-multilingual-MiniLM-L12-v2`, about 120 MB). The model is downloaded on the first note search into `AI_EMBEDDING_CACHE` (by default `~/.cache/currency-analyzer/embeddings`) and then reused. If that download fails, the assistant falls back to keyword overlap. Set `AI_KNOWLEDGE_RETRIEVAL=keyword` to skip the download.
 
 ## Enable SonarQube Cloud
 

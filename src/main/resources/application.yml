@@ -1,6 +1,10 @@
 spring:
   application:
     name: currency-analyzer-java
+  ai:
+    model:
+      chat: none
+      embedding: none
   datasource:
     url: ${DATABASE_URL:jdbc:postgresql://localhost:5433/currency_analyzer}
     username: ${DATABASE_USERNAME:currency}
@@ -59,6 +63,15 @@ app:
     deepseek:
       base-url: ${DEEPSEEK_BASE_URL:https://api.deepseek.com}
       api-key: ${DEEPSEEK_API_KEY:}
+    knowledge:
+      enabled: ${AI_KNOWLEDGE_ENABLED:true}
+      max-notes: ${AI_KNOWLEDGE_MAX_NOTES:4}
+      max-chars: ${AI_KNOWLEDGE_MAX_CHARS:4000}
+      retrieval: ${AI_KNOWLEDGE_RETRIEVAL:vector}
+      similarity-threshold: ${AI_KNOWLEDGE_SIMILARITY:0.45}
+      embedding-model-uri: ${AI_EMBEDDING_MODEL_URI:https://huggingface.co/Xenova/paraphrase-multilingual-MiniLM-L12-v2/resolve/main/onnx/model_quantized.onnx}
+      embedding-tokenizer-uri: ${AI_EMBEDDING_TOKENIZER_URI:https://huggingface.co/Xenova/paraphrase-multilingual-MiniLM-L12-v2/resolve/main/tokenizer.json}
+      embedding-cache-directory: ${AI_EMBEDDING_CACHE:${user.home}/.cache/currency-analyzer/embeddings}
   market:
     pairs: ${MARKET_PAIRS:}
     # Matches the dashboard refresh interval. Concurrent viewers share one upstream fetch.

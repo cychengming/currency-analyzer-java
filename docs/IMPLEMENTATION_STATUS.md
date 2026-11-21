@@ -7,7 +7,7 @@ Phase 2 - PostgreSQL, authentication, and legacy import
 ## Completed
 
 - Created the Java 25 Maven project.
-- Pinned Spring Boot 4.0.1.
+- Pinned Spring Boot 4.1.2.
 - Added Spring MVC, Spring Security, validation, Actuator, and Prometheus dependencies.
 - Added anonymous access for the current pages, authentication bootstrap routes, health endpoints, and `/metrics`.
 - Added the initial compatibility error envelope and auth-status endpoint.

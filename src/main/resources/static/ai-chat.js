@@ -22,7 +22,73 @@
         document.getElementById('aiConversationSelect').addEventListener('change', selectConversation);
         document.getElementById('aiChatForm').addEventListener('submit', sendMessage);
         document.getElementById('aiChatStopButton').addEventListener('click', stopResponse);
+        installPanelResize(panel);
         panel.hidden = true;
+    }
+
+    function installPanelResize(panel) {
+        const handle = document.getElementById('aiChatResize');
+        const storageKey = 'ai-chat-panel-width';
+        const minimumWidth = 320;
+
+        function maximumWidth() {
+            return Math.max(minimumWidth, Math.min(window.innerWidth, 960));
+        }
+
+        function applyWidth(width) {
+            const next = Math.round(Math.min(maximumWidth(), Math.max(minimumWidth, width)));
+            panel.style.setProperty('--ai-chat-width', `${next}px`);
+            handle.setAttribute('aria-valuemin', String(minimumWidth));
+            handle.setAttribute('aria-valuemax', String(maximumWidth()));
+            handle.setAttribute('aria-valuenow', String(next));
+            return next;
+        }
+
+        const saved = Number(localStorage.getItem(storageKey));
+        if (saved >= minimumWidth) {
+            applyWidth(saved);
+        }
+
+        handle.addEventListener('pointerdown', event => {
+            event.preventDefault();
+            try {
+                handle.setPointerCapture(event.pointerId);
+            } catch (exception) {
+                // Synthetic pointer events in tests have no active pointer to capture.
+            }
+            const move = pointerEvent => applyWidth(window.innerWidth - pointerEvent.clientX);
+            const finish = pointerEvent => {
+                try {
+                    if (handle.hasPointerCapture(pointerEvent.pointerId)) {
+                        handle.releasePointerCapture(pointerEvent.pointerId);
+                    }
+                } catch (exception) {
+                    // The pointer was already released.
+                }
+                handle.removeEventListener('pointermove', move);
+                handle.removeEventListener('pointerup', finish);
+                handle.removeEventListener('pointercancel', finish);
+                localStorage.setItem(storageKey, handle.getAttribute('aria-valuenow'));
+            };
+            handle.addEventListener('pointermove', move);
+            handle.addEventListener('pointerup', finish);
+            handle.addEventListener('pointercancel', finish);
+        });
+
+        handle.addEventListener('keydown', event => {
+            const step = event.shiftKey ? 80 : 24;
+            const current = Number(handle.getAttribute('aria-valuenow')) || 440;
+            if (event.key === 'ArrowLeft') {
+                localStorage.setItem(storageKey, String(applyWidth(current + step)));
+            } else if (event.key === 'ArrowRight') {
+                localStorage.setItem(storageKey, String(applyWidth(current - step)));
+            } else {
+                return;
+            }
+            event.preventDefault();
+        });
+
+        window.addEventListener('resize', () => applyWidth(Number(handle.getAttribute('aria-valuenow')) || 440));
     }
 
     async function openChat() {
@@ -96,7 +162,7 @@
         const messages = await response.json();
         const container = document.getElementById('aiChatMessages');
         container.replaceChildren();
-        messages.forEach(message => appendMessage(message.role, message.content));
+        messages.forEach(message => appendMessage(message.role, message.content, message.reasoning));
         scrollMessagesToBottom();
     }
 
@@ -110,7 +176,10 @@
         input.value = '';
         hideError();
         appendMessage('user', message);
-        const assistantElement = appendMessage('assistant', '');
+        const assistantElement = appendMessage('assistant', '', '');
+        const answerElement = assistantElement.querySelector('.ai-chat-answer');
+        const thoughtElement = assistantElement.querySelector('.ai-chat-thought');
+        const thoughtBody = assistantElement.querySelector('.ai-chat-thought-body');
         state.sending = true;
         state.abortController = new AbortController();
         updateSendingControls();
@@ -130,10 +199,20 @@
                 throw new Error(error.error || `Request failed (${response.status})`);
             }
             await readEventStream(response.body, event => {
-                if (event.event === 'text_delta') {
+                if (event.event === 'reasoning_delta') {
                     const payload = JSON.parse(event.data);
-                    assistantElement.textContent += payload.text || '';
+                    appendThought(thoughtElement, thoughtBody, payload.text || '');
                     scrollMessagesToBottom();
+                } else if (event.event === 'tool_started') {
+                    const payload = JSON.parse(event.data);
+                    appendThought(thoughtElement, thoughtBody, `${toolStatus(payload.tool)}\n`);
+                    scrollMessagesToBottom();
+                } else if (event.event === 'text_delta') {
+                    const payload = JSON.parse(event.data);
+                    answerElement.textContent += payload.text || '';
+                    scrollMessagesToBottom();
+                } else if (event.event === 'message_completed') {
+                    thoughtElement.open = false;
                 } else if (event.event === 'error') {
                     const payload = JSON.parse(event.data);
                     showError(payload.message || 'The assistant could not complete the response.');
@@ -147,6 +226,21 @@
             updateSendingControls();
             await refreshConversationTitles();
         }
+    }
+
+    function toolStatus(tool) {
+        const labels = {
+            get_live_rates: 'Looking up live rates...',
+            get_historical_series: 'Looking up price history...',
+            compare_pairs: 'Comparing the two pairs...',
+            get_alert_history: 'Looking up alerts...',
+            get_alert_preferences: 'Looking up alert rules...',
+            get_monitoring_state: 'Looking up monitoring state...',
+            get_settings: 'Looking up settings...',
+            get_latest_forecast: 'Looking up the stored forecast...',
+            search_notes: 'Searching the notes...'
+        };
+        return labels[tool] || 'Looking up application data...';
     }
 
     async function stopResponse() {
@@ -231,10 +325,34 @@
         if (data.length) onEvent({ event, data: data.join('\n') });
     }
 
-    function appendMessage(role, content) {
+    function appendThought(thoughtElement, thoughtBody, text) {
+        if (!text) return;
+        thoughtElement.hidden = false;
+        thoughtElement.open = true;
+        thoughtBody.textContent += text;
+    }
+
+    function appendMessage(role, content, reasoning) {
         const message = document.createElement('div');
         message.className = `ai-chat-message ai-chat-message-${role}`;
-        message.textContent = content;
+        if (role === 'assistant') {
+            const thought = document.createElement('details');
+            thought.className = 'ai-chat-thought';
+            thought.hidden = !reasoning;
+            thought.open = false;
+            const summary = document.createElement('summary');
+            summary.textContent = 'Thought process';
+            const body = document.createElement('div');
+            body.className = 'ai-chat-thought-body';
+            body.textContent = reasoning || '';
+            thought.append(summary, body);
+            const answer = document.createElement('div');
+            answer.className = 'ai-chat-answer';
+            answer.textContent = content || '';
+            message.append(thought, answer);
+        } else {
+            message.textContent = content;
+        }
         document.getElementById('aiChatMessages').append(message);
         scrollMessagesToBottom();
         return message;
