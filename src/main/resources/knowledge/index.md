@@ -71,13 +71,3 @@
 ## 记录
 
 `journal/` 是 Kelly 扫描、持仓快照和交易日志，里面有具体金额和成本，不是通用方法。
-
-`interview/` 是后端面试笔记，不用于行情和仓位回答。入口是 [[interview/index]]。
-
-## 知识库本身
-
-- [[双向链接]]
-- [[知识管理工作流]]
-- [[Obsidian]]
-- [[Hermes-Agent]]
-- [[LLM-Wiki]]
