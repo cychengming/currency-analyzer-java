@@ -84,23 +84,23 @@ public class AiConversationRepository {
                 """,
             titleFrom(content), createdAt, conversationId
         );
-        return new AiMessage(messageId, "user", content, now);
+        return new AiMessage(messageId, "user", content, now, null);
     }
 
-    public AiMessage addAssistantMessage(UUID conversationId, String content, Instant now) {
+    public AiMessage addAssistantMessage(UUID conversationId, String content, String reasoning, Instant now) {
         UUID messageId = UUID.randomUUID();
         OffsetDateTime createdAt = OffsetDateTime.ofInstant(now, ZoneOffset.UTC);
         jdbcTemplate.update("""
-                INSERT INTO ai_messages (id, conversation_id, role, content, created_at)
-                VALUES (?, ?, 'assistant', ?, ?)
+                INSERT INTO ai_messages (id, conversation_id, role, content, reasoning_content, created_at)
+                VALUES (?, ?, 'assistant', ?, ?, ?)
                 """,
-            messageId, conversationId, content, createdAt
+            messageId, conversationId, content, blankToNull(reasoning), createdAt
         );
         jdbcTemplate.update(
             "UPDATE ai_conversations SET updated_at = ? WHERE id = ?",
             createdAt, conversationId
         );
-        return new AiMessage(messageId, "assistant", content, now);
+        return new AiMessage(messageId, "assistant", content, now, blankToNull(reasoning));
     }
 
     public void addToolInvocation(
@@ -132,9 +132,9 @@ public class AiConversationRepository {
 
     public List<AiProviderMessage> findRecentMessages(UUID conversationId) {
         List<AiProviderMessage> history = jdbcTemplate.query("""
-                SELECT role, content
+                SELECT role, content, reasoning_content
                 FROM (
-                    SELECT role, content, created_at, id
+                    SELECT role, content, reasoning_content, created_at, id
                     FROM ai_messages
                     WHERE conversation_id = ?
                     ORDER BY created_at DESC, id DESC
@@ -142,8 +142,11 @@ public class AiConversationRepository {
                 ) recent
                 ORDER BY created_at, id
                 """,
-            (resultSet, rowNumber) ->
-                new AiProviderMessage(resultSet.getString("role"), resultSet.getString("content")),
+            (resultSet, rowNumber) -> new AiProviderMessage(
+                resultSet.getString("role"),
+                resultSet.getString("content"),
+                resultSet.getString("reasoning_content")
+            ),
             conversationId, MAX_CONTEXT_MESSAGES
         );
         return history;
@@ -151,7 +154,7 @@ public class AiConversationRepository {
 
     public List<AiMessage> findConversationMessages(UUID conversationId) {
         return jdbcTemplate.query("""
-                SELECT id, role, content, created_at
+                SELECT id, role, content, reasoning_content, created_at
                 FROM ai_messages
                 WHERE conversation_id = ?
                 ORDER BY created_at, id
@@ -160,7 +163,8 @@ public class AiConversationRepository {
                 resultSet.getObject("id", UUID.class),
                 resultSet.getString("role"),
                 resultSet.getString("content"),
-                resultSet.getObject("created_at", OffsetDateTime.class).toInstant()
+                resultSet.getObject("created_at", OffsetDateTime.class).toInstant(),
+                resultSet.getString("reasoning_content")
             ),
             conversationId
         );
@@ -180,6 +184,10 @@ public class AiConversationRepository {
         );
     }
 
-    public record AiProviderMessage(String role, String content) {
+    private static String blankToNull(String value) {
+        return value == null || value.isBlank() ? null : value;
+    }
+
+    public record AiProviderMessage(String role, String content, String reasoning) {
     }
 }

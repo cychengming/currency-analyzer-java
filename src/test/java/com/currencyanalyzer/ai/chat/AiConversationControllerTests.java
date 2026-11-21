@@ -203,6 +203,37 @@ class AiConversationControllerTests {
     }
 
     @Test
+    void showsTheModelThoughtProcessBeforeTheAnswer() throws Exception {
+        MvcResult created = mockMvc.perform(post("/api/ai/conversations")
+                .with(user("thought-user"))
+                .with(csrf()))
+            .andExpect(status().isCreated())
+            .andReturn();
+        String id = JsonMapper.builder().build()
+            .readTree(created.getResponse().getContentAsString())
+            .get("id").asText();
+
+        MvcResult pendingResponse = mockMvc.perform(post("/api/ai/conversations/{id}/messages", id)
+                .with(user("thought-user"))
+                .with(csrf())
+                .contentType("application/json")
+                .accept("text/event-stream")
+                .content("{\"message\":\"Please show your thinking\"}"))
+            .andExpect(request().asyncStarted())
+            .andReturn();
+
+        mockMvc.perform(asyncDispatch(pendingResponse))
+            .andExpect(status().isOk())
+            .andExpect(content().string(org.hamcrest.Matchers.containsString("event:reasoning_delta")))
+            .andExpect(content().string(org.hamcrest.Matchers.containsString("Compare the numbers before answering.")))
+            .andExpect(content().string(org.hamcrest.Matchers.containsString("Reply from test provider.")));
+
+        mockMvc.perform(get("/api/ai/conversations/{id}/messages", id).with(user("thought-user")))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$[1].reasoning").value("Compare the numbers before answering."));
+    }
+
+    @Test
     void quotesTheLiveRateReturnedByTheTool() throws Exception {
         when(marketDataService.fetchLiveRates()).thenReturn(Map.of(
             "EUR/USD", new LiveRate(1.0832, 0.0012, 0.11)
@@ -283,6 +314,7 @@ class AiConversationControllerTests {
             return new AiProvider() {
                 @Override
                 public void stream(List<Message> messages, java.util.function.Consumer<String> onText,
+                                   java.util.function.Consumer<String> onReasoning,
                                    java.util.function.BooleanSupplier isCancelled) {
                     lastPrompt.set(List.copyOf(messages));
                     if (!isCancelled.getAsBoolean()) {
@@ -304,10 +336,13 @@ class AiConversationControllerTests {
                         }
                     }
                     if (latestUser.contains("current EUR/USD rate") && toolResult.isEmpty()) {
-                        return new Completion(null, List.of(new ToolCall("call-1", "get_live_rates", "{}")));
+                        return new Completion(null, "The user asked for the live quote.", List.of(new ToolCall("call-1", "get_live_rates", "{}")));
                     }
                     if (!toolResult.isEmpty()) {
-                        return new Completion("From the live feed: " + toolResult, List.of());
+                        return new Completion("From the live feed: " + toolResult, null, List.of());
+                    }
+                    if (latestUser.contains("show your thinking")) {
+                        return new Completion(null, "Compare the numbers before answering.", List.of());
                     }
                     return Completion.NONE;
                 }

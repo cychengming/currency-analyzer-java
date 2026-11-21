@@ -25,6 +25,10 @@ class DeepSeekAiProviderTests {
             authorization.set(exchange.getRequestHeaders().getFirst("Authorization"));
             requestBody.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
             byte[] response = """
+                data: {"choices":[{"delta":{"reasoning_content":"First "}}]}
+
+                data: {"choices":[{"delta":{"reasoning_content":"think."}}]}
+
                 data: {"choices":[{"delta":{"content":"Hello "}}]}
 
                 data: {"choices":[{"delta":{"content":"there."}}]}
@@ -48,16 +52,20 @@ class DeepSeekAiProviderTests {
                 500
             );
             List<String> deltas = new ArrayList<>();
+            List<String> reasoning = new ArrayList<>();
 
             provider.stream(
                 List.of(new AiProvider.Message("user", "Say hello")),
                 deltas::add,
+                reasoning::add,
                 () -> false
             );
 
             assertEquals("Bearer test-secret", authorization.get());
             assertTrue(requestBody.get().contains("\"model\":\"deepseek-flash\""));
             assertTrue(requestBody.get().contains("\"stream\":true"));
+            assertTrue(requestBody.get().contains("\"thinking\":{\"type\":\"enabled\"}"));
+            assertEquals(List.of("First ", "think."), reasoning);
             assertEquals(List.of("Hello ", "there."), deltas);
         } finally {
             server.stop(0);
@@ -76,7 +84,7 @@ class DeepSeekAiProviderTests {
 
         AiProviderException exception = assertThrows(
             AiProviderException.class,
-            () -> provider.stream(List.of(), ignored -> { }, () -> false)
+            () -> provider.stream(List.of(), ignored -> { }, ignored -> { }, () -> false)
         );
 
         assertEquals("DeepSeek API key is not configured", exception.getMessage());

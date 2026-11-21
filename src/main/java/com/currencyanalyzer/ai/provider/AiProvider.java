@@ -10,6 +10,7 @@ public interface AiProvider {
     void stream(
         List<Message> messages,
         Consumer<String> onText,
+        Consumer<String> onReasoning,
         BooleanSupplier isCancelled
     );
 
@@ -30,27 +31,31 @@ public interface AiProvider {
     record ToolDefinition(String name, String description, Map<String, Object> parameters) {
     }
 
-    record Turn(String role, String content, String toolCallId, List<ToolCall> toolCalls) {
+    record Turn(String role, String content, String toolCallId, List<ToolCall> toolCalls, String reasoning) {
         public Turn {
             content = content == null ? "" : content;
             toolCalls = toolCalls == null ? List.of() : List.copyOf(toolCalls);
         }
 
         public static Turn text(String role, String content) {
-            return new Turn(role, content, null, List.of());
+            return new Turn(role, content, null, List.of(), null);
+        }
+
+        public static Turn assistant(String content, String reasoning) {
+            return new Turn("assistant", content, null, List.of(), reasoning);
         }
 
         public static Turn toolResult(String toolCallId, String content) {
-            return new Turn("tool", content, toolCallId, List.of());
+            return new Turn("tool", content, toolCallId, List.of(), null);
         }
 
-        public static Turn toolRequest(String content, List<ToolCall> toolCalls) {
-            return new Turn("assistant", content, null, toolCalls);
+        public static Turn toolRequest(String content, String reasoning, List<ToolCall> toolCalls) {
+            return new Turn("assistant", content, null, toolCalls, reasoning);
         }
     }
 
-    record Completion(String content, List<ToolCall> toolCalls) {
-        public static final Completion NONE = new Completion(null, List.of());
+    record Completion(String content, String reasoning, List<ToolCall> toolCalls) {
+        public static final Completion NONE = new Completion(null, null, List.of());
 
         public Completion {
             toolCalls = toolCalls == null ? List.of() : List.copyOf(toolCalls);

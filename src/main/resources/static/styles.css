@@ -1086,6 +1086,25 @@ textarea[disabled] {
     background: var(--surface);
 }
 
+.ai-chat-thought {
+    margin-bottom: 8px;
+    color: var(--text-muted);
+    font-size: 12px;
+}
+
+.ai-chat-thought[hidden] {
+    display: none;
+}
+
+.ai-chat-thought summary {
+    cursor: pointer;
+}
+
+.ai-chat-thought-body {
+    margin-top: 6px;
+    white-space: pre-wrap;
+}
+
 .ai-chat-error {
     padding: 10px;
     color: var(--danger);

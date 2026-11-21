@@ -167,27 +167,33 @@ public class AiConversationService {
 
     private void generateResponse(UUID conversationId, ActiveResponse activeResponse, UUID userMessageId) {
         StringBuilder responseText = new StringBuilder();
+        StringBuilder reasoningText = new StringBuilder();
         try {
             sendEvent(activeResponse.emitter, "message_started", Map.of(
                 "user_message_id", userMessageId.toString()
             ));
 
-            List<AiProvider.Message> history = conversationRepository.findRecentMessages(conversationId).stream()
-                .map(message -> new AiProvider.Message(message.role(), message.content()))
-                .toList();
+            List<AiConversationRepository.AiProviderMessage> history =
+                conversationRepository.findRecentMessages(conversationId);
             List<Turn> prompt = new ArrayList<>(history.size() + 1);
-            prompt.add(Turn.text("system", systemMessage(latestUserMessage(history))));
-            history.forEach(message -> prompt.add(Turn.text(message.role(), message.content())));
+            prompt.add(Turn.text("system", systemMessage(latestUserText(history))));
+            history.forEach(message -> prompt.add(historyTurn(message)));
             List<ToolTrace> toolTraces = new ArrayList<>();
-            boolean usedTools = answerWithTools(conversationId, activeResponse, prompt, responseText, toolTraces);
+            boolean usedTools = answerWithTools(
+                conversationId, activeResponse, prompt, responseText, reasoningText, toolTraces
+            );
             if (!usedTools && responseText.isEmpty() && !activeResponse.cancelled.get()) {
-                aiProvider.stream(historyWithSystem(prompt), delta -> appendDelta(activeResponse, responseText, delta),
-                    activeResponse.cancelled::get);
+                aiProvider.stream(
+                    historyWithSystem(prompt),
+                    delta -> appendDelta(activeResponse, responseText, delta),
+                    delta -> appendReasoning(activeResponse, reasoningText, delta),
+                    activeResponse.cancelled::get
+                );
             }
 
             if (!activeResponse.cancelled.get() && !responseText.isEmpty()) {
                 AiMessage assistantMessage = conversationRepository.addAssistantMessage(
-                    conversationId, responseText.toString(), clock.instant()
+                    conversationId, responseText.toString(), reasoningText.toString(), clock.instant()
                 );
                 for (ToolTrace toolTrace : toolTraces) {
                     conversationRepository.addToolInvocation(
@@ -249,6 +255,7 @@ public class AiConversationService {
         ActiveResponse activeResponse,
         List<Turn> prompt,
         StringBuilder responseText,
+        StringBuilder reasoningText,
         List<ToolTrace> toolTraces
     ) {
         boolean usedTools = false;
@@ -259,6 +266,7 @@ public class AiConversationService {
                 forceAnswer ? List.of() : assistantTools.definitions(),
                 activeResponse.cancelled::get
             );
+            appendReasoning(activeResponse, reasoningText, completion.reasoning());
             appendDelta(activeResponse, responseText, completion.content());
             if (!completion.hasToolCalls() || forceAnswer) {
                 return usedTools || responseText.length() > 0;
@@ -266,7 +274,7 @@ public class AiConversationService {
             usedTools = true;
             List<ToolCall> calls = completion.toolCalls();
             int accepted = Math.min(calls.size(), MAX_TOOL_CALLS_PER_ROUND);
-            prompt.add(Turn.toolRequest(completion.content(), calls.subList(0, accepted)));
+            prompt.add(Turn.toolRequest(completion.content(), completion.reasoning(), calls.subList(0, accepted)));
             for (int index = 0; index < calls.size(); index++) {
                 ToolCall call = calls.get(index);
                 if (index >= accepted) {
@@ -278,6 +286,7 @@ public class AiConversationService {
         }
         if (usedTools && responseText.isEmpty() && !activeResponse.cancelled.get()) {
             Completion completion = aiProvider.complete(prompt, List.of(), activeResponse.cancelled::get);
+            appendReasoning(activeResponse, reasoningText, completion.reasoning());
             appendDelta(activeResponse, responseText, completion.content());
         }
         return usedTools || responseText.length() > 0;
@@ -307,6 +316,21 @@ public class AiConversationService {
         ));
         log.debug("Tool {} finished for conversation {} in {} ms", call.name(), conversationId, durationMs);
         return Turn.toolResult(call.id(), result);
+    }
+
+    private void appendReasoning(ActiveResponse activeResponse, StringBuilder reasoningText, String delta) {
+        if (activeResponse.cancelled.get() || delta == null || delta.isEmpty()) {
+            return;
+        }
+        reasoningText.append(delta);
+        sendEvent(activeResponse.emitter, "reasoning_delta", Map.of("text", delta));
+    }
+
+    private static Turn historyTurn(AiConversationRepository.AiProviderMessage message) {
+        if ("assistant".equals(message.role()) && message.reasoning() != null && !message.reasoning().isBlank()) {
+            return Turn.assistant(message.content(), message.reasoning());
+        }
+        return Turn.text(message.role(), message.content());
     }
 
     private void appendDelta(ActiveResponse activeResponse, StringBuilder responseText, String delta) {
@@ -341,9 +365,9 @@ public class AiConversationService {
         );
     }
 
-    private static String latestUserMessage(List<AiProvider.Message> history) {
+    private static String latestUserText(List<AiConversationRepository.AiProviderMessage> history) {
         for (int index = history.size() - 1; index >= 0; index--) {
-            AiProvider.Message message = history.get(index);
+            AiConversationRepository.AiProviderMessage message = history.get(index);
             if ("user".equals(message.role())) {
                 return message.content();
             }

@@ -162,7 +162,7 @@
         const messages = await response.json();
         const container = document.getElementById('aiChatMessages');
         container.replaceChildren();
-        messages.forEach(message => appendMessage(message.role, message.content));
+        messages.forEach(message => appendMessage(message.role, message.content, message.reasoning));
         scrollMessagesToBottom();
     }
 
@@ -176,7 +176,10 @@
         input.value = '';
         hideError();
         appendMessage('user', message);
-        const assistantElement = appendMessage('assistant', '');
+        const assistantElement = appendMessage('assistant', '', '');
+        const answerElement = assistantElement.querySelector('.ai-chat-answer');
+        const thoughtElement = assistantElement.querySelector('.ai-chat-thought');
+        const thoughtBody = assistantElement.querySelector('.ai-chat-thought-body');
         state.sending = true;
         state.abortController = new AbortController();
         updateSendingControls();
@@ -196,19 +199,20 @@
                 throw new Error(error.error || `Request failed (${response.status})`);
             }
             await readEventStream(response.body, event => {
-                if (event.event === 'tool_started') {
+                if (event.event === 'reasoning_delta') {
                     const payload = JSON.parse(event.data);
-                    if (!assistantElement.dataset.hasAnswer) {
-                        assistantElement.textContent = toolStatus(payload.tool);
-                    }
+                    appendThought(thoughtElement, thoughtBody, payload.text || '');
+                    scrollMessagesToBottom();
+                } else if (event.event === 'tool_started') {
+                    const payload = JSON.parse(event.data);
+                    appendThought(thoughtElement, thoughtBody, `${toolStatus(payload.tool)}\n`);
+                    scrollMessagesToBottom();
                 } else if (event.event === 'text_delta') {
                     const payload = JSON.parse(event.data);
-                    if (!assistantElement.dataset.hasAnswer) {
-                        assistantElement.dataset.hasAnswer = 'true';
-                        assistantElement.textContent = '';
-                    }
-                    assistantElement.textContent += payload.text || '';
+                    answerElement.textContent += payload.text || '';
                     scrollMessagesToBottom();
+                } else if (event.event === 'message_completed') {
+                    thoughtElement.open = false;
                 } else if (event.event === 'error') {
                     const payload = JSON.parse(event.data);
                     showError(payload.message || 'The assistant could not complete the response.');
@@ -316,10 +320,34 @@
         if (data.length) onEvent({ event, data: data.join('\n') });
     }
 
-    function appendMessage(role, content) {
+    function appendThought(thoughtElement, thoughtBody, text) {
+        if (!text) return;
+        thoughtElement.hidden = false;
+        thoughtElement.open = true;
+        thoughtBody.textContent += text;
+    }
+
+    function appendMessage(role, content, reasoning) {
         const message = document.createElement('div');
         message.className = `ai-chat-message ai-chat-message-${role}`;
-        message.textContent = content;
+        if (role === 'assistant') {
+            const thought = document.createElement('details');
+            thought.className = 'ai-chat-thought';
+            thought.hidden = !reasoning;
+            thought.open = false;
+            const summary = document.createElement('summary');
+            summary.textContent = 'Thought process';
+            const body = document.createElement('div');
+            body.className = 'ai-chat-thought-body';
+            body.textContent = reasoning || '';
+            thought.append(summary, body);
+            const answer = document.createElement('div');
+            answer.className = 'ai-chat-answer';
+            answer.textContent = content || '';
+            message.append(thought, answer);
+        } else {
+            message.textContent = content;
+        }
         document.getElementById('aiChatMessages').append(message);
         scrollMessagesToBottom();
         return message;

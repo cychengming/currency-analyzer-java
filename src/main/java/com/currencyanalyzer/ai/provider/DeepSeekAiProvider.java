@@ -54,6 +54,7 @@ public class DeepSeekAiProvider implements AiProvider {
     public void stream(
         List<Message> messages,
         Consumer<String> onText,
+        Consumer<String> onReasoning,
         BooleanSupplier isCancelled
     ) {
         if (apiKey.isBlank()) {
@@ -61,12 +62,13 @@ public class DeepSeekAiProvider implements AiProvider {
         }
 
         try {
-            String payload = objectMapper.writeValueAsString(Map.of(
-                "model", model,
-                "messages", messages,
-                "stream", true,
-                "max_tokens", maxOutputTokens
-            ));
+            Map<String, Object> body = new LinkedHashMap<>();
+            body.put("model", model);
+            body.put("messages", messages);
+            body.put("stream", true);
+            body.put("max_tokens", maxOutputTokens);
+            body.put("thinking", Map.of("type", "enabled"));
+            String payload = objectMapper.writeValueAsString(body);
             HttpRequest request = HttpRequest.newBuilder()
                 .uri(URI.create(baseUrl + "/chat/completions"))
                 .timeout(requestTimeout)
@@ -96,7 +98,7 @@ public class DeepSeekAiProvider implements AiProvider {
                     if ("[DONE]".equals(data)) {
                         return;
                     }
-                    emitTextDelta(data, onText);
+                    emitTextDelta(data, onText, onReasoning);
                 }
             }
         } catch (InterruptedException exception) {
@@ -128,6 +130,7 @@ public class DeepSeekAiProvider implements AiProvider {
             body.put("messages", messages.stream().map(DeepSeekAiProvider::messageBody).toList());
             body.put("stream", false);
             body.put("max_tokens", maxOutputTokens);
+            body.put("thinking", Map.of("type", "enabled"));
             if (!tools.isEmpty()) {
                 body.put("tools", tools.stream().map(DeepSeekAiProvider::toolBody).toList());
                 body.put("tool_choice", "auto");
@@ -159,6 +162,9 @@ public class DeepSeekAiProvider implements AiProvider {
     private Completion parseCompletion(String body) throws IOException {
         JsonNode message = objectMapper.readTree(body).path("choices").path(0).path("message");
         String content = message.path("content").isTextual() ? message.path("content").asText() : null;
+        String reasoning = message.path("reasoning_content").isTextual()
+            ? message.path("reasoning_content").asText()
+            : null;
         List<ToolCall> toolCalls = new ArrayList<>();
         for (JsonNode call : message.path("tool_calls")) {
             String id = call.path("id").asText("");
@@ -170,7 +176,7 @@ public class DeepSeekAiProvider implements AiProvider {
                 toolCalls.add(new ToolCall(id.isBlank() ? "call-" + toolCalls.size() : id, name, argumentsJson));
             }
         }
-        return new Completion(content, toolCalls);
+        return new Completion(content, reasoning, toolCalls);
     }
 
     private static Map<String, Object> messageBody(Turn message) {
@@ -179,6 +185,9 @@ public class DeepSeekAiProvider implements AiProvider {
         body.put("content", message.content());
         if (message.toolCallId() != null) {
             body.put("tool_call_id", message.toolCallId());
+        }
+        if ("assistant".equals(message.role()) && message.reasoning() != null && !message.reasoning().isBlank()) {
+            body.put("reasoning_content", message.reasoning());
         }
         if (!message.toolCalls().isEmpty()) {
             body.put("tool_calls", message.toolCalls().stream().map(call -> Map.of(
@@ -204,10 +213,14 @@ public class DeepSeekAiProvider implements AiProvider {
         );
     }
 
-    private void emitTextDelta(String data, Consumer<String> onText) {
+    private void emitTextDelta(String data, Consumer<String> onText, Consumer<String> onReasoning) {
         try {
-            JsonNode root = objectMapper.readTree(data);
-            JsonNode content = root.path("choices").path(0).path("delta").path("content");
+            JsonNode delta = objectMapper.readTree(data).path("choices").path(0).path("delta");
+            JsonNode reasoning = delta.path("reasoning_content");
+            if (onReasoning != null && reasoning.isTextual() && !reasoning.asText().isEmpty()) {
+                onReasoning.accept(reasoning.asText());
+            }
+            JsonNode content = delta.path("content");
             if (content.isTextual() && !content.asText().isEmpty()) {
                 onText.accept(content.asText());
             }
