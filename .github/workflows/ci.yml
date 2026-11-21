@@ -37,9 +37,8 @@ jobs:
           if [ "$status" -eq 0 ]; then
             exit 0
           fi
-          # SonarCloud rejects a second scanner while Automatic Analysis is on.
-          # Tests already passed. The pull-request gate comes from that analysis,
-          # which does not include the JaCoCo report produced above.
+          # Automatic Analysis must stay off. While it is on, SonarCloud rejects this
+          # scan and the JaCoCo report from the verify step is never uploaded.
           if grep -q "Automatic Analysis is enabled" target/sonar-ci.log; then
             echo "::warning title=JaCoCo coverage was not uploaded::SonarCloud Automatic Analysis is on, so this scan was rejected. Turn it off under Project settings, Analysis Method. The next run will upload target/site/jacoco/jacoco.xml and wait for the quality gate."
             exit 0
