@@ -98,8 +98,6 @@ public class DeepSeekAiProvider implements AiProvider {
             if (!isCancelled.getAsBoolean()) {
                 throw new AiProviderException("DeepSeek request was interrupted", exception);
             }
-        } catch (AiProviderException exception) {
-            throw exception;
         } catch (IOException | IllegalArgumentException exception) {
             throw new AiProviderException("Unable to communicate with DeepSeek", exception);
         }
