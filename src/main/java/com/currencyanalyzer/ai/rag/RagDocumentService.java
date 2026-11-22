@@ -13,8 +13,10 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Clock;
 import java.time.Instant;
+import java.util.Arrays;
 import java.util.HexFormat;
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -343,6 +345,26 @@ public class RagDocumentService {
     }
 
     public record DownloadedDocument(RagDocument document, byte[] bytes) {
+        @Override
+        public boolean equals(Object other) {
+            if (this == other) {
+                return true;
+            }
+            if (!(other instanceof DownloadedDocument that)) {
+                return false;
+            }
+            return Objects.equals(document, that.document) && Arrays.equals(bytes, that.bytes);
+        }
+
+        @Override
+        public int hashCode() {
+            return 31 * Objects.hashCode(document) + Arrays.hashCode(bytes);
+        }
+
+        @Override
+        public String toString() {
+            return "DownloadedDocument[document=" + document + ", bytesLength=" + (bytes == null ? 0 : bytes.length) + "]";
+        }
     }
 
     public record StorageInfo(

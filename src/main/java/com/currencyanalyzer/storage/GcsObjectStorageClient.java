@@ -11,10 +11,6 @@ import com.google.cloud.storage.Storage;
 import com.google.cloud.storage.StorageOptions;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
-import org.springframework.stereotype.Component;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -26,10 +22,9 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.function.Function;
 import java.util.function.Supplier;
 
-@Component
-@ConditionalOnProperty(name = "app.storage.provider", havingValue = "gcs", matchIfMissing = true)
 public class GcsObjectStorageClient implements ObjectStorageClient {
 
     private static final Logger log = LoggerFactory.getLogger(GcsObjectStorageClient.class);
@@ -40,12 +35,7 @@ public class GcsObjectStorageClient implements ObjectStorageClient {
     private final Object lock = new Object();
     private volatile Storage storage;
 
-    @Autowired
-    public GcsObjectStorageClient(
-        @Value("${app.storage.gcs.project-id:}") String projectId,
-        @Value("${app.storage.gcs.bucket:}") String bucket,
-        @Value("${app.storage.gcs.credentials-path:}") String credentialsPath
-    ) {
+    public GcsObjectStorageClient(String projectId, String bucket, String credentialsPath) {
         this(projectId, bucket, () -> createStorage(projectId, credentialsPath));
     }
 
@@ -191,11 +181,15 @@ public class GcsObjectStorageClient implements ObjectStorageClient {
     }
 
     static Proxy resolveProxy() {
+        return resolveProxy(System::getenv);
+    }
+
+    static Proxy resolveProxy(Function<String, String> env) {
         String proxyUrl = firstNonBlank(
-            System.getenv("HTTPS_PROXY"),
-            System.getenv("https_proxy"),
-            System.getenv("HTTP_PROXY"),
-            System.getenv("http_proxy")
+            env.apply("HTTPS_PROXY"),
+            env.apply("https_proxy"),
+            env.apply("HTTP_PROXY"),
+            env.apply("http_proxy")
         );
         if (proxyUrl == null) {
             return null;

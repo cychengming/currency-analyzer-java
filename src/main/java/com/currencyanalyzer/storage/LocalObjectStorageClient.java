@@ -1,9 +1,5 @@
 package com.currencyanalyzer.storage;
 
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
-import org.springframework.stereotype.Component;
-
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -13,15 +9,11 @@ import java.util.List;
 import java.util.Optional;
 import java.util.stream.Stream;
 
-@Component
-@ConditionalOnProperty(name = "app.storage.provider", havingValue = "local")
 public class LocalObjectStorageClient implements ObjectStorageClient {
 
     private final Path rootDirectory;
 
-    public LocalObjectStorageClient(
-        @Value("${app.storage.local-directory:${user.home}/.cache/currency-analyzer/uploads}") String rootDirectory
-    ) {
+    public LocalObjectStorageClient(String rootDirectory) {
         this.rootDirectory = Path.of(rootDirectory).toAbsolutePath().normalize();
     }
 

@@ -11,14 +11,11 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 @Component
 public class TextDocumentParser implements DocumentParser {
 
     private static final Set<String> SUPPORTED_EXTENSIONS = Set.of(".md", ".markdown", ".txt", ".csv");
-    private static final Pattern HEADING_PATTERN = Pattern.compile("^(#{1,3})\\s+(.+?)\\s*$");
     private static final Set<String> LOW_SIGNAL_HEADINGS = Set.of("标签", "tags", "tag");
     private static final int MIN_STANDALONE_SECTION_CHARS = 45;
     private static final int MAX_QUOTE_METADATA_STUB_CHARS = 140;
@@ -194,12 +191,25 @@ public class TextDocumentParser implements DocumentParser {
             if (inCodeFence) {
                 continue;
             }
-            Matcher matcher = HEADING_PATTERN.matcher(stripped);
-            if (matcher.matches()) {
-                return matcher.group(2).strip();
+            String heading = extractMarkdownHeading(stripped);
+            if (heading != null) {
+                return heading;
             }
         }
         return "";
+    }
+
+    private static String extractMarkdownHeading(String strippedLine) {
+        int hashes = 0;
+        int len = strippedLine.length();
+        while (hashes < len && hashes < 3 && strippedLine.charAt(hashes) == '#') {
+            hashes++;
+        }
+        if (hashes == 0 || hashes >= len || !Character.isWhitespace(strippedLine.charAt(hashes))) {
+            return null;
+        }
+        String text = strippedLine.substring(hashes + 1).strip();
+        return text.isEmpty() ? null : text;
     }
 
     private List<Section> splitMarkdownSections(String body) {
@@ -213,13 +223,13 @@ public class TextDocumentParser implements DocumentParser {
                 inCodeFence = !inCodeFence;
             }
             if (!inCodeFence) {
-                Matcher matcher = HEADING_PATTERN.matcher(stripped);
-                if (matcher.matches()) {
+                String heading = extractMarkdownHeading(stripped);
+                if (heading != null) {
                     if (!currentBody.isEmpty() && !currentBody.toString().isBlank()) {
                         sections.add(new Section(currentHeading, currentBody.toString()));
                         currentBody.setLength(0);
                     }
-                    currentHeading = matcher.group(2).strip();
+                    currentHeading = heading;
                     continue;
                 }
             }

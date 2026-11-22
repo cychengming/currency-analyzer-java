@@ -13,8 +13,10 @@ import java.sql.SQLException;
 import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -371,6 +373,33 @@ public class RagDocumentRepository {
     }
 
     public record ChunkRecord(int chunkIndex, String heading, String content, float[] embedding) {
+        @Override
+        public boolean equals(Object other) {
+            if (this == other) {
+                return true;
+            }
+            if (!(other instanceof ChunkRecord that)) {
+                return false;
+            }
+            return chunkIndex == that.chunkIndex
+                && Objects.equals(heading, that.heading)
+                && Objects.equals(content, that.content)
+                && Arrays.equals(embedding, that.embedding);
+        }
+
+        @Override
+        public int hashCode() {
+            int result = Objects.hash(chunkIndex, heading, content);
+            return 31 * result + Arrays.hashCode(embedding);
+        }
+
+        @Override
+        public String toString() {
+            return "ChunkRecord[chunkIndex=" + chunkIndex
+                + ", heading=" + heading
+                + ", contentLength=" + (content == null ? 0 : content.length())
+                + ", embeddingDim=" + (embedding == null ? 0 : embedding.length) + "]";
+        }
     }
 
     public record ReadyChunk(
