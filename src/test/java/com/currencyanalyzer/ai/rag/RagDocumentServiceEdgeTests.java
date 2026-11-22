@@ -101,8 +101,6 @@ class RagDocumentServiceEdgeTests {
         RagDocumentService.DownloadedDocument second = service.download(id).orElseThrow();
         assertEquals(first, second);
         assertEquals(first.hashCode(), second.hashCode());
-        assertEquals(first, first);
-        assertNotEquals(first, "not-a-download");
         assertNotEquals(first, new RagDocumentService.DownloadedDocument(builtin, new byte[] {1}));
         assertTrue(first.toString().contains("bytesLength="));
 

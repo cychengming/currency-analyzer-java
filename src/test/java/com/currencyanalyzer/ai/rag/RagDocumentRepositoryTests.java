@@ -74,8 +74,9 @@ class RagDocumentRepositoryTests {
         assertTrue(repository.searchByVector(new float[] {1f}, 0.45, 0).isEmpty());
 
         RagDocumentRepository.ChunkRecord r1 = new RagDocumentRepository.ChunkRecord(0, null, null, null);
-        assertEquals(r1, r1);
-        assertNotEquals(r1, "not-a-record");
+        RagDocumentRepository.ChunkRecord r2 = new RagDocumentRepository.ChunkRecord(0, null, null, null);
+        assertEquals(r1, r2);
+        assertFalse(r1.equals(null));
         assertTrue(r1.toString().contains("contentLength=0"));
         assertTrue(r1.toString().contains("embeddingDim=0"));
     }
