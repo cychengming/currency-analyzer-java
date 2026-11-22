@@ -126,6 +126,20 @@ class RagDocumentControllerTests {
         mockMvc.perform(post("/api/rag/sync").param("prefix", "knowledge").with(user("alice")).with(csrf()))
             .andExpect(status().isAccepted())
             .andExpect(jsonPath("$.queued").value(1));
+
+        mockMvc.perform(get("/api/rag/info").with(user("alice")))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.provider").value("local"));
+
+        UUID unknown = UUID.randomUUID();
+        mockMvc.perform(get("/api/rag/documents/{id}", unknown).with(user("alice")))
+            .andExpect(status().isNotFound());
+        mockMvc.perform(get("/api/rag/documents/{id}/download", unknown).with(user("alice")))
+            .andExpect(status().isNotFound());
+        mockMvc.perform(post("/api/rag/documents/{id}/reindex", unknown).with(user("alice")).with(csrf()))
+            .andExpect(status().isNotFound());
+        mockMvc.perform(get("/api/rag/search").param("q", "   ").with(user("alice")))
+            .andExpect(status().isBadRequest());
     }
 
     private void awaitReady(UUID id) throws InterruptedException {

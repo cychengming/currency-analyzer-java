@@ -101,8 +101,67 @@ class RagDocumentServiceEdgeTests {
         RagDocumentService.DownloadedDocument second = service.download(id).orElseThrow();
         assertEquals(first, second);
         assertEquals(first.hashCode(), second.hashCode());
+        assertEquals(first, first);
+        assertNotEquals(first, "not-a-download");
         assertNotEquals(first, new RagDocumentService.DownloadedDocument(builtin, new byte[] {1}));
         assertTrue(first.toString().contains("bytesLength="));
+
+        UUID missingId = UUID.randomUUID();
+        when(repository.findById(missingId)).thenReturn(Optional.empty());
+        assertTrue(service.download(missingId).isEmpty());
+        assertTrue(service.reindex(missingId).isEmpty());
+        assertEquals(false, service.delete(missingId));
+    }
+
+    @Test
+    void syncUpdatesModifiedObjectsAndSkipsMissingOrInvalidOnes() {
+        RagDocumentRepository repository = mock(RagDocumentRepository.class);
+        ObjectStorageClient storage = mock(ObjectStorageClient.class);
+        RagIngestionService ingestion = mock(RagIngestionService.class);
+        TextDocumentParser parser = new TextDocumentParser(600, 100, 50);
+        KnowledgeLibrary library = new KnowledgeLibrary(List.of());
+
+        when(storage.providerName()).thenReturn("gcs");
+        when(storage.bucketName()).thenReturn("currency-analyze");
+
+        UUID existingId = UUID.randomUUID();
+        RagDocument existingDoc = new RagDocument(
+            existingId, RagDocument.SOURCE_UPLOAD, "existing.md", "Old Title", "text/markdown; charset=utf-8",
+            20L, "old-sha", "gcs", "currency-analyze", "knowledge/existing.md", "1",
+            RagDocument.STATUS_READY, 1, null, "alice", clock.instant(), clock.instant()
+        );
+        byte[] updatedBytes = "# Updated Title\nNew body content here.".getBytes(StandardCharsets.UTF_8);
+
+        when(storage.list("knowledge")).thenReturn(List.of(
+            new ObjectStorageClient.StoredObjectSummary("knowledge/existing.md", updatedBytes.length, "text/markdown", "2"),
+            new ObjectStorageClient.StoredObjectSummary("knowledge/missing.md", 10L, "text/markdown", "1"),
+            new ObjectStorageClient.StoredObjectSummary("knowledge/binary.txt", 4L, "text/plain", "1"),
+            new ObjectStorageClient.StoredObjectSummary("knowledge/huge.md", 99_999L, "text/markdown", "1")
+        ));
+        when(repository.findByStorage("gcs", "knowledge/existing.md")).thenReturn(Optional.of(existingDoc));
+        when(repository.findByStorage("gcs", "knowledge/missing.md")).thenReturn(Optional.empty());
+        when(repository.findByStorage("gcs", "knowledge/binary.txt")).thenReturn(Optional.empty());
+        when(storage.get("knowledge/existing.md")).thenReturn(Optional.of(updatedBytes));
+        when(storage.get("knowledge/missing.md")).thenReturn(Optional.empty());
+        when(storage.get("knowledge/binary.txt")).thenReturn(Optional.of(new byte[] {(byte) 0xFF, (byte) 0xFE, 0x00, 0x01}));
+
+        RagDocumentService service = new RagDocumentService(
+            repository, storage, parser, ingestion, library, clock, "knowledge", 1000L
+        );
+        RagSyncSummary summary = service.syncFromStorage(null, "");
+        assertEquals(4, summary.scanned());
+        assertEquals(1, summary.queued());
+        assertEquals(3, summary.ignored());
+
+        UUID missingBlobDocId = UUID.randomUUID();
+        RagDocument missingBlobDoc = new RagDocument(
+            missingBlobDocId, RagDocument.SOURCE_UPLOAD, "gone.md", "Gone", "text/markdown",
+            10L, "sha", "gcs", "currency-analyze", "knowledge/gone.md", "1",
+            RagDocument.STATUS_READY, 1, null, "alice", clock.instant(), clock.instant()
+        );
+        when(repository.findById(missingBlobDocId)).thenReturn(Optional.of(missingBlobDoc));
+        when(storage.get("knowledge/gone.md")).thenReturn(Optional.empty());
+        assertThrows(IllegalStateException.class, () -> service.reindex(missingBlobDocId));
     }
 
     @Test

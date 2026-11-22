@@ -106,5 +106,30 @@ class TextDocumentParserTests {
         assertThrows(IllegalArgumentException.class, () ->
             parser.parse("empty.md", new byte[0], null)
         );
+        assertThrows(IllegalArgumentException.class, () ->
+            parser.parse("blank.txt", "   \n\t  ".getBytes(StandardCharsets.UTF_8), null)
+        );
+    }
+
+    @Test
+    void handlesBomCodeFencesCsvHeaderOnlyAndBreakPoints() {
+        String mdWithBomAndFence = "\uFEFF# Top Guide\n\n```python\n# not a heading\nx = 1\n```\n\n"
+            + "Paragraph one has enough detail to exceed the split limit cleanly.\n\n"
+            + "Paragraph two also contains sentences. Second sentence here! Third sentence here?\n"
+            + "SingleLineWithoutSpaces".repeat(12);
+
+        DocumentParser.ParsedDocument parsed = parser.parse("folder/guide.markdown", mdWithBomAndFence.getBytes(StandardCharsets.UTF_8), null);
+        assertEquals("Top Guide", parsed.title());
+        assertTrue(parsed.chunks().size() >= 3);
+        assertEquals("text/markdown; charset=utf-8", parser.inferContentType("guide.markdown"));
+        assertEquals("text/csv; charset=utf-8", parser.inferContentType("data.csv"));
+        assertEquals("text/plain; charset=utf-8", parser.inferContentType("notes.txt"));
+
+        DocumentParser.ParsedDocument headerOnlyCsv = parser.parse("empty_rows.csv", "pair,rate\n\n".getBytes(StandardCharsets.UTF_8), null);
+        assertEquals(1, headerOnlyCsv.chunks().size());
+        assertEquals("CSV Header", headerOnlyCsv.chunks().getFirst().heading());
+
+        assertEquals("---\nunclosed front matter", TextDocumentParser.stripFrontMatter("---\nunclosed front matter"));
+        assertEquals("", TextDocumentParser.stripFrontMatter("---\nk: v\n---"));
     }
 }
