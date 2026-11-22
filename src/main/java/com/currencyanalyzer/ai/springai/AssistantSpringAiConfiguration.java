@@ -27,7 +27,7 @@ public class AssistantSpringAiConfiguration {
         @Value("${app.ai.deepseek.base-url:https://api.deepseek.com}") String baseUrl,
         @Value("${app.ai.deepseek.api-key}") String apiKey,
         @Value("${app.ai.model:deepseek-flash}") String model,
-        @Value("${app.ai.max-output-tokens:1200}") int maxOutputTokens,
+        @Value("${app.ai.max-output-tokens:8192}") int maxOutputTokens,
         @Value("${app.ai.request-timeout-seconds:60}") int timeoutSeconds
     ) {
         SimpleClientHttpRequestFactory requestFactory = new SimpleClientHttpRequestFactory();

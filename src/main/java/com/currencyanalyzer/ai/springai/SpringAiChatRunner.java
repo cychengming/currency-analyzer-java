@@ -34,6 +34,8 @@ public class SpringAiChatRunner {
     private static final int MAX_TOOL_ROUNDS = 3;
     private static final int MAX_TOOL_CALLS_PER_ROUND = 4;
     private static final String ANSWER_NUDGE = "Write the final answer now. Do not leave it blank.";
+    private static final String CONTINUE_NUDGE =
+        "The answer was cut off. Continue from the exact stopping point and finish the conclusion. Do not repeat the text already written.";
 
     private final ObjectProvider<ChatModel> chatModels;
     private final SpringAiMarketTools marketTools;
@@ -46,7 +48,7 @@ public class SpringAiChatRunner {
         ObjectProvider<ChatModel> chatModels,
         SpringAiMarketTools marketTools,
         @Value("${app.ai.model:deepseek-flash}") String model,
-        @Value("${app.ai.max-output-tokens:1200}") int maxOutputTokens
+        @Value("${app.ai.max-output-tokens:8192}") int maxOutputTokens
     ) {
         this.chatModels = chatModels;
         this.marketTools = marketTools;
@@ -85,12 +87,20 @@ public class SpringAiChatRunner {
             }
             usedTools = true;
         }
-        if (textCount.chars == 0 && lastRound != null && !cancelled.getAsBoolean()) {
-            requestAnswerWithoutThinking(chatModel, messages, lastRound, counting, cancelled, textCount);
+        if (lastRound != null && !cancelled.getAsBoolean() && needsAnotherPass(textCount, lastRound)) {
+            finishIncompleteAnswer(chatModel, messages, lastRound, counting, cancelled, textCount);
         }
     }
 
-    private void requestAnswerWithoutThinking(
+    private static boolean needsAnotherPass(TextCount textCount, Round lastRound) {
+        return textCount.chars == 0 || lengthLimited(lastRound.finishReason());
+    }
+
+    private static boolean lengthLimited(String finishReason) {
+        return finishReason != null && finishReason.equalsIgnoreCase("length");
+    }
+
+    private void finishIncompleteAnswer(
         ChatModel chatModel,
         List<Message> messages,
         Round previous,
@@ -98,17 +108,31 @@ public class SpringAiChatRunner {
         BooleanSupplier cancelled,
         TextCount textCount
     ) {
-        log.warn(
-            "DeepSeek returned no answer text (finish_reason={}, reasoning_chars={}). Retrying with thinking disabled.",
-            shown(previous.finishReason()),
-            previous.reasoning().length()
-        );
-        messages.add(new UserMessage(ANSWER_NUDGE));
-        Round retry = streamRound(chatModel, messages, false, false, listener, cancelled);
-        if (textCount.chars == 0 && !cancelled.getAsBoolean()) {
+        boolean clipped = textCount.chars > 0;
+        if (clipped) {
             log.warn(
-                "DeepSeek retry returned no answer text (finish_reason={})",
-                shown(retry.finishReason())
+                "DeepSeek cut the answer off at the output limit (finish_reason={}, answer_chars={}). Continuing with thinking disabled.",
+                shown(previous.finishReason()),
+                previous.answer().length()
+            );
+            if (!previous.calledTool() && !previous.answer().isBlank()) {
+                messages.add(DeepSeekAssistantMessage.builder().content(previous.answer()).build());
+            }
+            messages.add(new UserMessage(CONTINUE_NUDGE));
+        } else {
+            log.warn(
+                "DeepSeek returned no answer text (finish_reason={}, reasoning_chars={}). Retrying with thinking disabled.",
+                shown(previous.finishReason()),
+                previous.reasoning().length()
+            );
+            messages.add(new UserMessage(ANSWER_NUDGE));
+        }
+        Round retry = streamRound(chatModel, messages, false, false, listener, cancelled);
+        if (!cancelled.getAsBoolean() && (textCount.chars == 0 || lengthLimited(retry.finishReason()))) {
+            log.warn(
+                "DeepSeek continuation still did not finish the answer (finish_reason={}, answer_chars={})",
+                shown(retry.finishReason()),
+                textCount.chars
             );
         }
     }
@@ -140,7 +164,7 @@ public class SpringAiChatRunner {
                 .blockLast();
         } catch (RuntimeException exception) {
             if (cancelled.getAsBoolean()) {
-                return new Round(false, reasoning.toString(), finishReason.get());
+                return new Round(false, reasoning.toString(), text.toString(), finishReason.get());
             }
             if (exception instanceof AiProviderException providerException) {
                 throw providerException;
@@ -148,11 +172,11 @@ public class SpringAiChatRunner {
             throw new AiProviderException("Unable to communicate with DeepSeek", exception);
         }
         if (cancelled.getAsBoolean() || !includeTools) {
-            return new Round(false, reasoning.toString(), finishReason.get());
+            return new Round(false, reasoning.toString(), text.toString(), finishReason.get());
         }
         List<AssistantMessage.ToolCall> calls = toolCalls.toList();
         if (calls.isEmpty()) {
-            return new Round(false, reasoning.toString(), finishReason.get());
+            return new Round(false, reasoning.toString(), text.toString(), finishReason.get());
         }
         if (calls.size() > MAX_TOOL_CALLS_PER_ROUND) {
             calls = List.copyOf(calls.subList(0, MAX_TOOL_CALLS_PER_ROUND));
@@ -181,7 +205,7 @@ public class SpringAiChatRunner {
         } finally {
             ToolActivity.clear();
         }
-        return new Round(true, reasoning.toString(), finishReason.get());
+        return new Round(true, reasoning.toString(), text.toString(), finishReason.get());
     }
 
     private static String finishReason(ChatResponse chunk) {
@@ -271,7 +295,7 @@ public class SpringAiChatRunner {
     public record PriorMessage(String role, String content, String reasoning) {
     }
 
-    private record Round(boolean calledTool, String reasoning, String finishReason) {
+    private record Round(boolean calledTool, String reasoning, String answer, String finishReason) {
     }
 
     public interface StreamListener {
