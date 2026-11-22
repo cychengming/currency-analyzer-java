@@ -7,6 +7,9 @@ import com.currencyanalyzer.ai.provider.AiProvider.Message;
 import com.currencyanalyzer.ai.provider.AiProvider.ToolCall;
 import com.currencyanalyzer.ai.provider.AiProvider.ToolDefinition;
 import com.currencyanalyzer.ai.provider.AiProvider.Turn;
+import com.currencyanalyzer.ai.rag.RagDocument;
+import com.currencyanalyzer.ai.rag.RagDocumentRepository;
+import com.currencyanalyzer.ai.rag.RagIngestionService;
 import com.currencyanalyzer.ai.tools.AssistantTools;
 import com.currencyanalyzer.marketdata.LiveRate;
 import com.currencyanalyzer.marketdata.MarketDataService;
@@ -58,6 +61,12 @@ class AiConversationControllerTests {
 
     @Autowired
     private JdbcTemplate jdbcTemplate;
+
+    @Autowired
+    private RagDocumentRepository ragDocumentRepository;
+
+    @Autowired
+    private RagIngestionService ragIngestionService;
 
     @Autowired
     private AssistantTools assistantTools;
@@ -174,32 +183,60 @@ class AiConversationControllerTests {
 
     @Test
     void attachesMatchingKnowledgeNotesToTheProviderPrompt() throws Exception {
-        MvcResult created = mockMvc.perform(post("/api/ai/conversations")
-                .with(user("knowledge-user"))
-                .with(csrf()))
-            .andExpect(status().isCreated())
-            .andReturn();
-        String id = JsonMapper.builder().build()
-            .readTree(created.getResponse().getContentAsString())
-            .get("id").asText();
+        java.util.UUID docId = java.util.UUID.randomUUID();
+        byte[] content = "# 凯利公式\n\n凯利公式用于衡量单笔仓位押注占总资金的理论最优比例。\n"
+            .getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        java.time.Instant now = java.time.Instant.now();
+        ragDocumentRepository.insert(new RagDocument(
+            docId,
+            RagDocument.SOURCE_UPLOAD,
+            "kelly.md",
+            "凯利公式",
+            "text/markdown; charset=utf-8",
+            content.length,
+            "test-sha-kelly",
+            "local",
+            "test",
+            "knowledge/uploads/" + docId + "/kelly.md",
+            "1",
+            RagDocument.STATUS_PENDING,
+            0,
+            null,
+            "knowledge-user",
+            now,
+            now
+        ));
+        ragIngestionService.ingestNow(docId, "kelly.md", null, content);
+        try {
+            MvcResult created = mockMvc.perform(post("/api/ai/conversations")
+                    .with(user("knowledge-user"))
+                    .with(csrf()))
+                .andExpect(status().isCreated())
+                .andReturn();
+            String id = JsonMapper.builder().build()
+                .readTree(created.getResponse().getContentAsString())
+                .get("id").asText();
 
-        MvcResult pendingResponse = mockMvc.perform(post("/api/ai/conversations/{id}/messages", id)
-                .with(user("knowledge-user"))
-                .with(csrf())
-                .contentType("application/json")
-                .accept("text/event-stream")
-                .content("{\"message\":\"请用凯利公式解释仓位\"}"))
-            .andExpect(request().asyncStarted())
-            .andReturn();
+            MvcResult pendingResponse = mockMvc.perform(post("/api/ai/conversations/{id}/messages", id)
+                    .with(user("knowledge-user"))
+                    .with(csrf())
+                    .contentType("application/json")
+                    .accept("text/event-stream")
+                    .content("{\"message\":\"请用凯利公式解释仓位\"}"))
+                .andExpect(request().asyncStarted())
+                .andReturn();
 
-        mockMvc.perform(asyncDispatch(pendingResponse))
-            .andExpect(status().isOk());
+            mockMvc.perform(asyncDispatch(pendingResponse))
+                .andExpect(status().isOk());
 
-        List<AiProvider.Message> prompt = FakeProviderConfiguration.lastPrompt.get();
-        assertEquals("system", prompt.getFirst().role());
-        assertTrue(prompt.getFirst().content().contains("## 凯利公式"));
-        assertEquals("user", prompt.get(1).role());
-        assertEquals("请用凯利公式解释仓位", prompt.get(1).content());
+            List<AiProvider.Message> prompt = FakeProviderConfiguration.lastPrompt.get();
+            assertEquals("system", prompt.getFirst().role());
+            assertTrue(prompt.getFirst().content().contains("## 凯利公式"));
+            assertEquals("user", prompt.get(1).role());
+            assertEquals("请用凯利公式解释仓位", prompt.get(1).content());
+        } finally {
+            ragDocumentRepository.deleteById(docId);
+        }
     }
 
     @Test

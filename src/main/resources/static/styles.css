@@ -1198,3 +1198,210 @@ textarea[disabled] {
         width: 100%;
     }
 }
+
+/* ========== KNOWLEDGE & RAG ========== */
+.rag-actions-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
+    gap: 16px;
+}
+
+.rag-subpanel {
+    background: rgba(8, 19, 34, 0.56);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.rag-subpanel-title {
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: #93c5fd;
+}
+
+.rag-file-picker {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 12px;
+    border-radius: 10px;
+    border: 1px dashed rgba(148, 163, 184, 0.35);
+    background: rgba(15, 23, 42, 0.55);
+}
+
+.rag-file-picker-name {
+    flex: 1;
+    min-width: 0;
+    font-size: 13px;
+    color: #cbd5e1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.rag-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 12px;
+}
+
+.rag-toolbar input[type="text"] {
+    flex: 1;
+    min-width: 220px;
+    margin: 0;
+}
+
+.rag-toolbar select {
+    width: auto;
+    min-width: 160px;
+    margin: 0;
+}
+
+.rag-table-wrap {
+    width: 100%;
+    overflow-x: auto;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: rgba(8, 19, 34, 0.45);
+}
+
+.rag-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+}
+
+.rag-table th {
+    text-align: left;
+    padding: 10px 12px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: #94a3b8;
+    border-bottom: 1px solid var(--border);
+    background: rgba(15, 23, 42, 0.65);
+    white-space: nowrap;
+}
+
+.rag-table td {
+    padding: 10px 12px;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+    vertical-align: middle;
+}
+
+.rag-table tbody tr:last-child td {
+    border-bottom: none;
+}
+
+.rag-table tbody tr:hover {
+    background: rgba(56, 189, 248, 0.05);
+}
+
+.rag-doc-cell {
+    max-width: 360px;
+}
+
+.rag-doc-title {
+    font-weight: 600;
+    color: #f1f5f9;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.rag-doc-path {
+    font-size: 12px;
+    color: #94a3b8;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    margin-top: 2px;
+}
+
+.rag-doc-error {
+    font-size: 12px;
+    color: #fca5a5;
+    margin-top: 3px;
+}
+
+.rag-row-actions {
+    display: flex;
+    gap: 6px;
+    justify-content: flex-end;
+    white-space: nowrap;
+}
+
+.rag-row-actions button {
+    width: auto;
+    padding: 5px 10px;
+    font-size: 12px;
+}
+
+.rag-pagination {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    margin-top: 12px;
+    font-size: 13px;
+    color: #94a3b8;
+}
+
+.rag-pagination-buttons {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.rag-pagination-buttons button {
+    width: auto;
+    padding: 6px 12px;
+    font-size: 12px;
+}
+
+.rag-chunk-card {
+    background: rgba(8, 19, 34, 0.62);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 12px 14px;
+    margin-bottom: 10px;
+}
+
+.rag-chunk-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 8px;
+}
+
+.rag-chunk-preview {
+    display: block;
+    margin: 0;
+    padding: 10px 12px;
+    border-radius: 8px;
+    background: rgba(15, 23, 42, 0.72);
+    border: 1px solid rgba(148, 163, 184, 0.14);
+    color: #e2e8f0;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 12px;
+    line-height: 1.55;
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 220px;
+    overflow-y: auto;
+}
+
+@media (max-width: 900px) {
+    .rag-actions-grid {
+        grid-template-columns: 1fr;
+    }
+}

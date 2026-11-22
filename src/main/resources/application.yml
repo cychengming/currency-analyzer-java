@@ -6,16 +6,20 @@ spring:
       chat: none
       embedding: none
   datasource:
-    url: ${DATABASE_URL:jdbc:postgresql://localhost:5433/currency_analyzer}
+    url: ${DATABASE_URL:jdbc:postgresql://localhost:5434/currency_analyzer}
     username: ${DATABASE_USERNAME:currency}
     password: ${DATABASE_PASSWORD:currency}
     hikari:
       maximum-pool-size: ${DATABASE_POOL_SIZE:10}
       minimum-idle: 1
       connection-timeout: 10000
+  servlet:
+    multipart:
+      max-file-size: ${RAG_MAX_FILE_SIZE:5MB}
+      max-request-size: ${RAG_MAX_REQUEST_SIZE:6MB}
   flyway:
     enabled: true
-    locations: classpath:db/migration
+    locations: classpath:db/migration,classpath:db/postgresql-migration
     baseline-on-migrate: true
     baseline-version: 0
   web:
@@ -76,6 +80,22 @@ app:
     pairs: ${MARKET_PAIRS:}
     # Matches the dashboard refresh interval. Concurrent viewers share one upstream fetch.
     live-cache-ttl-seconds: ${MARKET_LIVE_CACHE_TTL_SECONDS:60}
+  storage:
+    provider: ${STORAGE_PROVIDER:gcs}
+    local-directory: ${LOCAL_STORAGE_DIR:${user.home}/.cache/currency-analyzer/uploads}
+    gcs:
+      project-id: ${GCP_PROJECT_ID:project-3806d7a4-0bd7-416f-8c4}
+      bucket: ${GCP_STORAGE_BUCKET:currency-analyze}
+      prefix: ${GCP_STORAGE_PREFIX:knowledge}
+      credentials-path: ${GCP_CREDENTIALS_PATH:}
+  rag:
+    enabled: ${RAG_ENABLED:true}
+    seed-builtin-guides: ${RAG_SEED_BUILTIN_GUIDES:true}
+    max-file-size-bytes: ${RAG_MAX_FILE_SIZE_BYTES:5242880}
+    chunk-max-chars: ${RAG_CHUNK_MAX_CHARS:600}
+    chunk-overlap-chars: ${RAG_CHUNK_OVERLAP_CHARS:100}
+    max-chunks-per-document: ${RAG_MAX_CHUNKS_PER_DOC:500}
+    similarity-threshold: ${RAG_SIMILARITY_THRESHOLD:0.45}
 
 logging:
   level:

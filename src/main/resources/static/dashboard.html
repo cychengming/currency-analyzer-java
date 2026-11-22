@@ -6,7 +6,7 @@
     <title>Currency Market Analyzer - Dashboard</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.9.1/chart.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chartjs-chart-financial@0.2.1/dist/chartjs-chart-financial.min.js"></script>
-    <link rel="stylesheet" href="/static/styles.css">
+    <link rel="stylesheet" href="/static/styles.css?v=20261122-3">
 </head>
 <body>
     <div class="dashboard" id="dashboard">
@@ -37,6 +37,7 @@
             <button class="nav-tab" data-page="trade" onclick="switchPage('trade', event); initTradePage();">Trade</button>
             <button class="nav-tab" data-page="forecast" onclick="switchPage('forecast', event); loadLatestForecast();">Forecast</button>
             <button class="nav-tab" data-page="deepLearning" onclick="switchPage('deepLearning', event)">Deep Learning</button>
+            <button class="nav-tab" data-page="knowledge" onclick="switchPage('knowledge', event); initKnowledgePage();">Knowledge</button>
             <button class="nav-tab" data-page="settings" onclick="switchPage('settings', event)">Settings</button>
         </div>
 
@@ -75,13 +76,14 @@
 
     <script src="/static/utils.js?v=20261113"></script>
     <script src="/static/auth.js?v=20261113"></script>
-    <script src="/static/dashboard.js?v=20261113"></script>
+    <script src="/static/dashboard.js?v=20261122-3"></script>
     <script src="/static/pages/overview.js?v=20261113"></script>
     <script src="/static/pages/alerts.js?v=20261113"></script>
     <script src="/static/pages/manage.js?v=20261113"></script>
     <script src="/static/pages/trade.js?v=20261113"></script>
     <script src="/static/pages/forecast.js?v=20261113"></script>
     <script src="/static/pages/deep_learning.js?v=20261113"></script>
+    <script src="/static/pages/knowledge.js?v=20261122-3"></script>
     <script src="/static/pages/settings.js?v=20261113"></script>
     <script src="/static/ai-chat.js?v=20261121-springai"></script>
 </body>

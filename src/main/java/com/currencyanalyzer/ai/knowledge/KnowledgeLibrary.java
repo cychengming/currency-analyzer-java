@@ -21,8 +21,7 @@ public class KnowledgeLibrary {
 
     private static final Logger log = LoggerFactory.getLogger(KnowledgeLibrary.class);
     private static final List<String> LOCATIONS = List.of(
-        "classpath*:knowledge/concepts/*.md",
-        "classpath*:knowledge/entities/*.md"
+        "classpath*:knowledge/guides/*.md"
     );
 
     private final List<KnowledgeNote> notes;
@@ -32,7 +31,7 @@ public class KnowledgeLibrary {
         this(loadClasspathNotes());
     }
 
-    KnowledgeLibrary(List<KnowledgeNote> notes) {
+    public KnowledgeLibrary(List<KnowledgeNote> notes) {
         this.notes = List.copyOf(notes);
     }
 
@@ -47,15 +46,14 @@ public class KnowledgeLibrary {
             try {
                 Resource[] resources = resolver.getResources(location);
                 Arrays.sort(resources, Comparator.comparing(Resource::getFilename, Comparator.nullsLast(String::compareTo)));
-                String folder = location.contains("/entities/") ? "entities" : "concepts";
                 for (Resource resource : resources) {
-                    loaded.add(read(resource, folder));
+                    loaded.add(read(resource, "guides"));
                 }
             } catch (IOException exception) {
                 throw new UncheckedIOException("Unable to read assistant knowledge from " + location, exception);
             }
         }
-        log.info("Loaded {} assistant knowledge notes", loaded.size());
+        log.info("Loaded {} built-in assistant guide(s)", loaded.size());
         return List.copyOf(loaded);
     }
 

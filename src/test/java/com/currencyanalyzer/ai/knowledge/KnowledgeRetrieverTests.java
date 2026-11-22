@@ -1,7 +1,13 @@
 package com.currencyanalyzer.ai.knowledge;
 
 import org.junit.jupiter.api.Test;
+import org.springframework.core.io.Resource;
+import org.springframework.core.io.support.PathMatchingResourcePatternResolver;
 
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -10,15 +16,18 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class KnowledgeRetrieverTests {
 
-    private final KnowledgeLibrary library = new KnowledgeLibrary();
-    private final KnowledgeRetriever retriever = new KnowledgeRetriever(library);
+    private final KnowledgeLibrary fixtureLibrary = loadFixtureLibrary();
+    private final KnowledgeRetriever retriever = new KnowledgeRetriever(fixtureLibrary);
 
     @Test
-    void loadsInvestmentNotesAndLeavesOutJournals() {
-        assertTrue(library.notes().size() > 40);
-        assertTrue(library.notes().stream().anyMatch(note -> note.title().equals("凯利公式")));
-        assertTrue(library.notes().stream().noneMatch(note ->
-            note.path().contains("/journal/") || note.path().contains("/interview/")
+    void classpathLibraryLoadsBuiltInGuidesOnly() {
+        KnowledgeLibrary builtIn = new KnowledgeLibrary();
+
+        assertFalse(builtIn.notes().isEmpty());
+        assertTrue(builtIn.notes().stream().allMatch(note -> note.path().startsWith("knowledge/guides/")));
+        assertTrue(builtIn.notes().stream().anyMatch(note -> note.title().contains("User Guide")));
+        assertTrue(builtIn.notes().stream().noneMatch(note ->
+            note.path().contains("/concepts/") || note.path().contains("/entities/") || note.path().contains("/journal/")
         ));
     }
 
@@ -53,5 +62,29 @@ class KnowledgeRetrieverTests {
         assertTrue(prompt.contains("Knowledge notes:"));
         assertTrue(prompt.contains("## 凯利公式"));
         assertTrue(prompt.contains("Never provide personalized buy, sell"));
+    }
+
+    private static KnowledgeLibrary loadFixtureLibrary() {
+        try {
+            PathMatchingResourcePatternResolver resolver = new PathMatchingResourcePatternResolver();
+            Resource[] resources = resolver.getResources("classpath*:knowledge/fixtures/*.md");
+            List<KnowledgeNote> notes = new ArrayList<>();
+            for (Resource resource : resources) {
+                try (InputStream input = resource.getInputStream()) {
+                    String raw = new String(input.readAllBytes(), StandardCharsets.UTF_8);
+                    String body = KnowledgeLibrary.stripFrontMatter(raw).strip();
+                    String title = body.lines()
+                        .map(String::strip)
+                        .filter(line -> line.startsWith("# "))
+                        .map(line -> line.substring(2).strip())
+                        .findFirst()
+                        .orElse(resource.getFilename());
+                    notes.add(new KnowledgeNote("knowledge/fixtures/" + resource.getFilename(), title, body));
+                }
+            }
+            return new KnowledgeLibrary(notes);
+        } catch (IOException exception) {
+            throw new IllegalStateException("Unable to load test knowledge fixtures", exception);
+        }
     }
 }

@@ -1,13 +1,9 @@
 package com.currencyanalyzer.ai.springai;
 
-import com.currencyanalyzer.ai.knowledge.KnowledgeLibrary;
-import com.currencyanalyzer.ai.knowledge.LazyTransformersEmbeddingModel;
-import com.currencyanalyzer.ai.knowledge.SemanticKnowledgeIndex;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.deepseek.DeepSeekChatModel;
 import org.springframework.ai.deepseek.DeepSeekChatOptions;
 import org.springframework.ai.deepseek.api.DeepSeekApi;
-import org.springframework.ai.embedding.EmbeddingModel;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
@@ -58,18 +54,5 @@ public class AssistantSpringAiConfiguration {
             end--;
         }
         return value.substring(0, end);
-    }
-
-    @Bean
-    @ConditionalOnProperty(name = "app.ai.knowledge.retrieval", havingValue = "vector")
-    SemanticKnowledgeIndex semanticKnowledgeIndex(
-        KnowledgeLibrary library,
-        @Value("${app.ai.knowledge.similarity-threshold:0.45}") double similarityThreshold,
-        @Value("${app.ai.knowledge.embedding-model-uri}") String modelUri,
-        @Value("${app.ai.knowledge.embedding-tokenizer-uri}") String tokenizerUri,
-        @Value("${app.ai.knowledge.embedding-cache-directory}") String cacheDirectory
-    ) {
-        EmbeddingModel embeddingModel = new LazyTransformersEmbeddingModel(modelUri, tokenizerUri, cacheDirectory);
-        return new SemanticKnowledgeIndex(library, embeddingModel, similarityThreshold);
     }
 }
