@@ -102,9 +102,9 @@ public class BuiltinGuideSeeder implements ApplicationRunner {
             }
 
             if (async) {
-                ingestionService.enqueue(id, filename, null, bytes);
+                ingestionService.enqueue(id, sha256, filename, null, bytes);
             } else {
-                ingestionService.ingestNow(id, filename, null, bytes);
+                ingestionService.ingestNow(id, sha256, filename, null, bytes);
             }
             queued++;
         }

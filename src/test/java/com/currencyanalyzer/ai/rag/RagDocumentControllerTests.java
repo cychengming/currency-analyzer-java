@@ -54,31 +54,46 @@ class RagDocumentControllerTests {
     }
 
     @Test
-    void requiresAuthenticationAndCsrf() throws Exception {
+    void requiresAuthenticationCsrfAndAdminRoleForMutations() throws Exception {
         mockMvc.perform(get("/api/rag/documents"))
             .andExpect(status().isUnauthorized());
 
         MockMultipartFile file = new MockMultipartFile(
             "file", "note.md", "text/markdown", "# Title\nBody text".getBytes(StandardCharsets.UTF_8)
         );
-        mockMvc.perform(multipart("/api/rag/documents").file(file).with(user("alice")))
+        mockMvc.perform(multipart("/api/rag/documents").file(file).with(user("admin")))
+            .andExpect(status().isForbidden());
+
+        // Regular logged-in users have read-only access and cannot mutate the shared corpus
+        mockMvc.perform(get("/api/rag/info").with(user("alice")))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.canManage").value(false));
+        mockMvc.perform(get("/api/rag/documents").with(user("alice")))
+            .andExpect(status().isOk());
+        mockMvc.perform(multipart("/api/rag/documents").file(file).with(user("alice")).with(csrf()))
+            .andExpect(status().isForbidden());
+        mockMvc.perform(post("/api/rag/sync").with(user("alice")).with(csrf()))
+            .andExpect(status().isForbidden());
+        mockMvc.perform(post("/api/rag/documents/{id}/reindex", UUID.randomUUID()).with(user("alice")).with(csrf()))
+            .andExpect(status().isForbidden());
+        mockMvc.perform(delete("/api/rag/documents/{id}", UUID.randomUUID()).with(user("alice")).with(csrf()))
             .andExpect(status().isForbidden());
     }
 
     @Test
-    void uploadsSearchesDownloadsReindexesAndDeletesDocument() throws Exception {
+    void adminUploadsSearchesDownloadsReindexesAndDeletesDocument() throws Exception {
         byte[] content = "# Liquidity Cycles\n\nCentral bank balance sheets drive global dollar liquidity.\n"
             .getBytes(StandardCharsets.UTF_8);
         MockMultipartFile file = new MockMultipartFile("file", "liquidity.md", "text/markdown", content);
 
         MvcResult uploadResult = mockMvc.perform(multipart("/api/rag/documents")
                 .file(file)
-                .with(user("alice"))
+                .with(user("admin"))
                 .with(csrf()))
             .andExpect(status().isAccepted())
             .andExpect(jsonPath("$.filename").value("liquidity.md"))
             .andExpect(jsonPath("$.title").value("Liquidity Cycles"))
-            .andExpect(jsonPath("$.uploadedBy").value("alice"))
+            .andExpect(jsonPath("$.uploadedBy").value("admin"))
             .andReturn();
 
         JsonNode body = JsonMapper.builder().build().readTree(uploadResult.getResponse().getContentAsString());
@@ -100,43 +115,49 @@ class RagDocumentControllerTests {
             .andExpect(header().string("Content-Disposition", containsString("attachment")))
             .andExpect(header().string("X-Content-Type-Options", "nosniff"));
 
-        mockMvc.perform(post("/api/rag/documents/{id}/reindex", id).with(user("alice")).with(csrf()))
+        mockMvc.perform(post("/api/rag/documents/{id}/reindex", id).with(user("admin")).with(csrf()))
             .andExpect(status().isAccepted());
 
         awaitReady(id);
 
-        mockMvc.perform(delete("/api/rag/documents/{id}", id).with(user("alice")).with(csrf()))
+        mockMvc.perform(delete("/api/rag/documents/{id}", id).with(user("admin")).with(csrf()))
             .andExpect(status().isNoContent());
 
-        mockMvc.perform(delete("/api/rag/documents/{id}", id).with(user("alice")).with(csrf()))
+        mockMvc.perform(delete("/api/rag/documents/{id}", id).with(user("admin")).with(csrf()))
             .andExpect(status().isNotFound());
     }
 
     @Test
-    void rejectsUnsupportedFileTypesAndSupportsSyncEndpoint() throws Exception {
+    void rejectsUnsupportedFileTypesInvalidSyncPrefixesAndHandlesNotFound() throws Exception {
         MockMultipartFile bad = new MockMultipartFile(
             "file", "report.pdf", "application/pdf", "%PDF-1.7".getBytes(StandardCharsets.UTF_8)
         );
-        mockMvc.perform(multipart("/api/rag/documents").file(bad).with(user("alice")).with(csrf()))
+        mockMvc.perform(multipart("/api/rag/documents").file(bad).with(user("admin")).with(csrf()))
             .andExpect(status().isBadRequest())
             .andExpect(jsonPath("$.error", containsString("Unsupported file type")));
 
         storageClient.put("knowledge/test.csv", "pair,signal\nEUR/USD,breakout\n".getBytes(StandardCharsets.UTF_8), "text/csv");
+        storageClient.put("knowledge-other/leak.md", "# Leak\nShould not sync".getBytes(StandardCharsets.UTF_8), "text/markdown");
 
-        mockMvc.perform(post("/api/rag/sync").param("prefix", "knowledge").with(user("alice")).with(csrf()))
+        mockMvc.perform(post("/api/rag/sync").param("prefix", "knowledge").with(user("admin")).with(csrf()))
             .andExpect(status().isAccepted())
-            .andExpect(jsonPath("$.queued").value(1));
+            .andExpect(jsonPath("$.queued").value(1))
+            .andExpect(jsonPath("$.scanned").value(1));
 
-        mockMvc.perform(get("/api/rag/info").with(user("alice")))
+        mockMvc.perform(post("/api/rag/sync").param("prefix", "knowledge-other").with(user("admin")).with(csrf()))
+            .andExpect(status().isBadRequest());
+
+        mockMvc.perform(get("/api/rag/info").with(user("admin")))
             .andExpect(status().isOk())
-            .andExpect(jsonPath("$.provider").value("local"));
+            .andExpect(jsonPath("$.provider").value("local"))
+            .andExpect(jsonPath("$.canManage").value(true));
 
         UUID unknown = UUID.randomUUID();
         mockMvc.perform(get("/api/rag/documents/{id}", unknown).with(user("alice")))
             .andExpect(status().isNotFound());
         mockMvc.perform(get("/api/rag/documents/{id}/download", unknown).with(user("alice")))
             .andExpect(status().isNotFound());
-        mockMvc.perform(post("/api/rag/documents/{id}/reindex", unknown).with(user("alice")).with(csrf()))
+        mockMvc.perform(post("/api/rag/documents/{id}/reindex", unknown).with(user("admin")).with(csrf()))
             .andExpect(status().isNotFound());
         mockMvc.perform(get("/api/rag/search").param("q", "   ").with(user("alice")))
             .andExpect(status().isBadRequest());

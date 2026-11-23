@@ -21,6 +21,7 @@ import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -35,6 +36,9 @@ class RagIngestionServiceTests {
         TextDocumentParser parser = new TextDocumentParser(150, 20, 50);
 
         when(repository.isPgVectorAvailable()).thenReturn(true);
+        when(repository.updateStatusIfMatches(any(), eq("sha-howard"), eq(RagDocument.STATUS_INDEXING), eq(0), eq(null), any()))
+            .thenReturn(true);
+        when(repository.replaceChunks(any(), eq("sha-howard"), any(), anyList(), any())).thenReturn(true);
         when(embeddingModel.embed(anyList())).thenAnswer(invocation -> {
             List<String> inputs = invocation.getArgument(0);
             return inputs.stream().map(text -> new float[] {0.1f, 0.2f}).toList();
@@ -52,38 +56,53 @@ class RagIngestionServiceTests {
             To outperform the consensus you must think differently and more accurately than the crowd about future outcomes.
             """;
 
-        service.ingestNow(docId, "howard.md", null, md.getBytes(StandardCharsets.UTF_8));
+        service.ingestNow(docId, "sha-howard", "howard.md", null, md.getBytes(StandardCharsets.UTF_8));
 
         @SuppressWarnings("unchecked")
         ArgumentCaptor<List<RagDocumentRepository.ChunkRecord>> captor = ArgumentCaptor.forClass(List.class);
-        verify(repository).replaceChunks(eq(docId), eq("Howard Marks Notes"), captor.capture(), eq(clock.instant()));
+        verify(repository).replaceChunks(eq(docId), eq("sha-howard"), eq("Howard Marks Notes"), captor.capture(), eq(clock.instant()));
         assertEquals(2, captor.getValue().size());
         assertNotNull(captor.getValue().getFirst().embedding());
         assertEquals(2, captor.getValue().getFirst().embedding().length);
+
+        String cjkLead = RagIngestionService.extractDocumentLead(List.of(
+            new DocumentParser.ParsedChunk(0, "简介", "霍华德马克斯是橡树资本联合创始人，长期撰写投资备忘录并强调周期与风险控制原则。")
+        ));
+        assertTrue(TextDocumentParser.weightedLength(cjkLead) <= 64);
         service.shutdown();
     }
 
     @Test
-    void fallsBackToTextOnlyChunksWhenEmbeddingFailsAndMarksDocumentFailedOnBadInput() {
+    void fallsBackToTextOnlyChunksWhenEmbeddingFailsAndSkipsStaleIngestion() {
         RagDocumentRepository repository = mock(RagDocumentRepository.class);
         EmbeddingModel brokenModel = mock(EmbeddingModel.class);
         TextDocumentParser parser = new TextDocumentParser(300, 50, 50);
 
         when(repository.isPgVectorAvailable()).thenReturn(true);
+        when(repository.updateStatusIfMatches(any(), eq("sha-ok"), eq(RagDocument.STATUS_INDEXING), eq(0), eq(null), any()))
+            .thenReturn(true);
+        when(repository.updateStatusIfMatches(any(), eq("sha-bad"), eq(RagDocument.STATUS_INDEXING), eq(0), eq(null), any()))
+            .thenReturn(true);
+        when(repository.updateStatusIfMatches(any(), eq("sha-stale"), eq(RagDocument.STATUS_INDEXING), eq(0), eq(null), any()))
+            .thenReturn(false);
         when(brokenModel.embed(anyList())).thenThrow(new IllegalStateException("download failed"));
 
         RagIngestionService service = new RagIngestionService(repository, parser, brokenModel, clock);
         UUID okId = UUID.randomUUID();
-        service.ingestNow(okId, "note.txt", "My Note", "Valid plain text note about FX volatility.".getBytes(StandardCharsets.UTF_8));
+        service.ingestNow(okId, "sha-ok", "note.txt", "My Note", "Valid plain text note about FX volatility.".getBytes(StandardCharsets.UTF_8));
 
         @SuppressWarnings("unchecked")
         ArgumentCaptor<List<RagDocumentRepository.ChunkRecord>> captor = ArgumentCaptor.forClass(List.class);
-        verify(repository).replaceChunks(eq(okId), eq("My Note"), captor.capture(), eq(clock.instant()));
+        verify(repository).replaceChunks(eq(okId), eq("sha-ok"), eq("My Note"), captor.capture(), eq(clock.instant()));
         assertNull(captor.getValue().getFirst().embedding());
 
         UUID badId = UUID.randomUUID();
-        service.ingestNow(badId, "bad.pdf", null, "not supported".getBytes(StandardCharsets.UTF_8));
-        verify(repository).updateStatus(eq(badId), eq(RagDocument.STATUS_FAILED), eq(0), any(String.class), eq(clock.instant()));
+        service.ingestNow(badId, "sha-bad", "bad.pdf", null, "not supported".getBytes(StandardCharsets.UTF_8));
+        verify(repository).updateStatusIfMatches(eq(badId), eq("sha-bad"), eq(RagDocument.STATUS_FAILED), eq(0), any(String.class), eq(clock.instant()));
+
+        UUID staleId = UUID.randomUUID();
+        service.ingestNow(staleId, "sha-stale", "stale.md", null, "# Stale\nOld body".getBytes(StandardCharsets.UTF_8));
+        verify(repository, never()).replaceChunks(eq(staleId), any(), any(), anyList(), any());
         service.shutdown();
     }
 

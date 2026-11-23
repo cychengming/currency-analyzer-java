@@ -24,3 +24,5 @@ app:
   rag:
     enabled: true
     seed-builtin-guides: false
+    sync-on-startup: false
+    admin-users: admin

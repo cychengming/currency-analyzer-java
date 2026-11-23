@@ -132,4 +132,18 @@ class TextDocumentParserTests {
         assertEquals("---\nunclosed front matter", TextDocumentParser.stripFrontMatter("---\nunclosed front matter"));
         assertEquals("", TextDocumentParser.stripFrontMatter("---\nk: v\n---"));
     }
+
+    @Test
+    void capsChineseChunksWithinTokenBudget() {
+        TextDocumentParser cjkParser = new TextDocumentParser(520, 80, 50);
+        String longChinese = "凯利公式用于衡量在胜率和赔率已知时单笔仓位占总资金的最优比例，结合波动率与回撤约束可以避免极端风险。".repeat(12);
+
+        DocumentParser.ParsedDocument parsed = cjkParser.parse("kelly-zh.md", longChinese.getBytes(StandardCharsets.UTF_8), "凯利公式");
+
+        assertTrue(parsed.chunks().size() >= 2);
+        for (DocumentParser.ParsedChunk chunk : parsed.chunks()) {
+            assertTrue(TextDocumentParser.weightedLength(chunk.content()) <= 520);
+            assertTrue(chunk.content().length() <= 260);
+        }
+    }
 }

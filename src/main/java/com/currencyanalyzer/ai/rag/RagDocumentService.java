@@ -1,7 +1,6 @@
 package com.currencyanalyzer.ai.rag;
 
 import com.currencyanalyzer.ai.knowledge.KnowledgeLibrary;
-import com.currencyanalyzer.ai.knowledge.KnowledgeNote;
 import com.currencyanalyzer.storage.ObjectStorageClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -14,10 +13,12 @@ import java.security.NoSuchAlgorithmException;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.Arrays;
+import java.util.HashSet;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 @Service
@@ -50,7 +51,7 @@ public class RagDocumentService {
         this.ingestionService = ingestionService;
         this.knowledgeLibrary = knowledgeLibrary;
         this.clock = clock;
-        this.defaultPrefix = normalizePrefix(defaultPrefix);
+        this.defaultPrefix = normalizePrefixSegment(defaultPrefix);
         this.maxFileSizeBytes = maxFileSizeBytes;
     }
 
@@ -93,20 +94,22 @@ public class RagDocumentService {
             throw exception;
         }
 
-        ingestionService.enqueue(id, filename, titleOverride, rawBytes);
+        ingestionService.enqueue(id, sha256, filename, titleOverride, rawBytes);
         return document;
     }
 
     public RagSyncSummary syncFromStorage(String requestedPrefix, String username) {
-        String prefix = requestedPrefix == null ? defaultPrefix : normalizePrefix(requestedPrefix);
-        List<ObjectStorageClient.StoredObjectSummary> objects = storageClient.list(prefix);
+        String scopedPrefix = resolveScopedPrefix(requestedPrefix);
+        List<ObjectStorageClient.StoredObjectSummary> objects = storageClient.list(scopedPrefix);
 
         int queued = 0;
         int skipped = 0;
         int ignored = 0;
+        Set<String> seenKeys = new HashSet<>();
         String actor = username == null || username.isBlank() ? "system" : username;
 
         for (ObjectStorageClient.StoredObjectSummary summary : objects) {
+            seenKeys.add(summary.key());
             String filename = extractFilename(summary.key());
             if (!documentParser.supports(filename) || summary.sizeBytes() <= 0 || summary.sizeBytes() > maxFileSizeBytes) {
                 ignored++;
@@ -183,19 +186,37 @@ public class RagDocumentService {
                 repository.insert(created);
             }
 
-            ingestionService.enqueue(documentId, filename, null, rawBytes);
+            ingestionService.enqueue(documentId, sha256, filename, null, rawBytes);
             queued++;
         }
+
+        int deleted = pruneDeletedUploads(scopedPrefix, seenKeys);
 
         return new RagSyncSummary(
             storageClient.providerName(),
             storageClient.bucketName(),
-            prefix,
+            scopedPrefix,
             objects.size(),
             queued,
             skipped,
-            ignored
+            ignored,
+            deleted
         );
+    }
+
+    public int recoverStuckDocuments() {
+        List<RagDocument> stuck = repository.findStuckDocuments();
+        int recovered = 0;
+        for (RagDocument document : stuck) {
+            try {
+                if (reindex(document.id()).isPresent()) {
+                    recovered++;
+                }
+            } catch (RuntimeException exception) {
+                log.warn("Unable to recover stuck RAG document {} ({}): {}", document.id(), document.filename(), exception.getMessage());
+            }
+        }
+        return recovered;
     }
 
     public List<RagDocument> list() {
@@ -224,17 +245,18 @@ public class RagDocumentService {
         RagDocument document = documentOpt.get();
         byte[] rawBytes = loadRawBytes(document)
             .orElseThrow(() -> new IllegalStateException("Source file is no longer available in storage"));
+        String sha256 = sha256Hex(rawBytes);
         repository.updateForReindex(
             document.id(),
             document.filename(),
             document.title(),
             document.contentType(),
             rawBytes.length,
-            sha256Hex(rawBytes),
+            sha256,
             document.storageGeneration(),
             clock.instant()
         );
-        ingestionService.enqueue(document.id(), document.filename(), document.isBuiltin() ? null : document.title(), rawBytes);
+        ingestionService.enqueue(document.id(), sha256, document.filename(), document.isBuiltin() ? null : document.title(), rawBytes);
         return repository.findById(id);
     }
 
@@ -247,18 +269,52 @@ public class RagDocumentService {
         if (document.isBuiltin()) {
             throw new IllegalArgumentException("Built-in application guides cannot be deleted");
         }
+        ingestionService.cancelPending(id);
         storageClient.delete(document.storageKey());
         return repository.deleteById(id);
     }
 
-    public StorageInfo storageInfo() {
+    public StorageInfo storageInfo(boolean canManage) {
         return new StorageInfo(
             storageClient.providerName(),
             storageClient.bucketName(),
             defaultPrefix,
             maxFileSizeBytes,
-            repository.isPgVectorAvailable()
+            repository.isPgVectorAvailable(),
+            canManage
         );
+    }
+
+    String resolveScopedPrefix(String requestedPrefix) {
+        String basePrefix = defaultPrefix.isEmpty() ? "" : defaultPrefix + "/";
+        if (requestedPrefix == null || requestedPrefix.isBlank()) {
+            return basePrefix;
+        }
+        String normalized = normalizePrefixSegment(requestedPrefix);
+        if (normalized.contains("..")) {
+            throw new IllegalArgumentException("Invalid sync prefix");
+        }
+        String candidate = normalized.isEmpty() ? "" : normalized + "/";
+        if (!basePrefix.isEmpty() && !candidate.startsWith(basePrefix)) {
+            throw new IllegalArgumentException(
+                "Sync prefix must stay within the configured prefix '" + basePrefix + "'"
+            );
+        }
+        return candidate;
+    }
+
+    private int pruneDeletedUploads(String scopedPrefix, Set<String> seenKeys) {
+        int deleted = 0;
+        for (RagDocument existing : repository.findUploadsByPrefix(storageClient.providerName(), scopedPrefix)) {
+            if (!seenKeys.contains(existing.storageKey())) {
+                ingestionService.cancelPending(existing.id());
+                if (repository.deleteById(existing.id())) {
+                    deleted++;
+                    log.info("Pruned deleted storage document {} ({})", existing.id(), existing.storageKey());
+                }
+            }
+        }
+        return deleted;
     }
 
     private Optional<byte[]> loadRawBytes(RagDocument document) {
@@ -321,7 +377,7 @@ public class RagDocumentService {
         return slash >= 0 ? normalized.substring(slash + 1) : normalized;
     }
 
-    private static String normalizePrefix(String prefix) {
+    private static String normalizePrefixSegment(String prefix) {
         if (prefix == null || prefix.isBlank()) {
             return "";
         }
@@ -372,7 +428,8 @@ public class RagDocumentService {
         String bucket,
         String defaultPrefix,
         long maxFileSizeBytes,
-        boolean pgVectorEnabled
+        boolean pgVectorEnabled,
+        boolean canManage
     ) {
     }
 }

@@ -7,6 +7,7 @@ public record RagSyncSummary(
     int scanned,
     int queued,
     int skipped,
-    int ignored
+    int ignored,
+    int deleted
 ) {
 }

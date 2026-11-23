@@ -1,5 +1,6 @@
 let ragPollTimer = null;
 let ragInfoLoaded = false;
+let ragCanManage = false;
 let ragAllDocuments = [];
 let ragCurrentPage = 1;
 const RAG_PAGE_SIZE = 15;
@@ -24,12 +25,15 @@ async function loadRagStorageInfo() {
     const info = await fetchAPI('/api/rag/info');
     if (!info) return;
     ragInfoLoaded = true;
+    ragCanManage = Boolean(info.canManage);
 
     const providerEl = document.getElementById('ragStorageProvider');
     const bucketEl = document.getElementById('ragStorageBucket');
     const vectorEl = document.getElementById('ragVectorStatus');
     const prefixInput = document.getElementById('ragSyncPrefix');
     const maxHint = document.getElementById('ragMaxSizeHint');
+    const uploadBtn = document.getElementById('ragUploadBtn');
+    const syncBtn = document.getElementById('ragSyncBtn');
 
     if (providerEl) providerEl.textContent = (info.provider || '—').toUpperCase();
     if (bucketEl) bucketEl.textContent = info.bucket || '—';
@@ -40,6 +44,15 @@ async function loadRagStorageInfo() {
     if (maxHint && info.maxFileSizeBytes) {
         const mb = (info.maxFileSizeBytes / (1024 * 1024)).toFixed(1).replace(/\.0$/, '');
         maxHint.textContent = `Max ${mb} MB (.md, .txt, .csv)`;
+    }
+    if (uploadBtn) uploadBtn.disabled = !ragCanManage;
+    if (syncBtn) syncBtn.disabled = !ragCanManage;
+    if (!ragCanManage) {
+        setInlineBanner(
+            'knowledgeNotice',
+            'Read-only access. Configure RAG_ADMIN_USERS to grant upload, sync, re-index, and delete permissions.',
+            'info'
+        );
     }
 }
 
@@ -287,20 +300,22 @@ function renderRagTable(container, docs) {
         };
         actions.appendChild(downloadBtn);
 
-        const reindexBtn = document.createElement('button');
-        reindexBtn.type = 'button';
-        reindexBtn.className = 'btn-secondary';
-        reindexBtn.textContent = 'Re-index';
-        reindexBtn.onclick = () => reindexRagDocument(doc.id);
-        actions.appendChild(reindexBtn);
+        if (ragCanManage) {
+            const reindexBtn = document.createElement('button');
+            reindexBtn.type = 'button';
+            reindexBtn.className = 'btn-secondary';
+            reindexBtn.textContent = 'Re-index';
+            reindexBtn.onclick = () => reindexRagDocument(doc.id);
+            actions.appendChild(reindexBtn);
 
-        if (doc.source !== 'builtin') {
-            const deleteBtn = document.createElement('button');
-            deleteBtn.type = 'button';
-            deleteBtn.className = 'btn-danger';
-            deleteBtn.textContent = 'Delete';
-            deleteBtn.onclick = () => deleteRagDocument(doc.id, doc.filename);
-            actions.appendChild(deleteBtn);
+            if (doc.source !== 'builtin') {
+                const deleteBtn = document.createElement('button');
+                deleteBtn.type = 'button';
+                deleteBtn.className = 'btn-danger';
+                deleteBtn.textContent = 'Delete';
+                deleteBtn.onclick = () => deleteRagDocument(doc.id, doc.filename);
+                actions.appendChild(deleteBtn);
+            }
         }
 
         actionsTd.appendChild(actions);
@@ -442,9 +457,10 @@ async function syncRagFromStorage() {
             setInlineBanner('knowledgeNotice', payload?.error || `Sync failed (${response.status})`, 'error');
             return;
         }
+        const deletedText = payload.deleted ? `, ${payload.deleted} removed` : '';
         setInlineBanner(
             'knowledgeNotice',
-            `Scanned ${payload.scanned} object(s) in ${payload.bucket}: ${payload.queued} queued, ${payload.skipped} unchanged, ${payload.ignored} ignored.`,
+            `Scanned ${payload.scanned} object(s) in ${payload.bucket}: ${payload.queued} queued, ${payload.skipped} unchanged, ${payload.ignored} ignored${deletedText}.`,
             'success'
         );
         await loadRagDocuments();

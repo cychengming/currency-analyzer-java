@@ -32,6 +32,8 @@ services:
       GCP_STORAGE_BUCKET: ${GCP_STORAGE_BUCKET:-currency-analyze}
       GCP_STORAGE_PREFIX: ${GCP_STORAGE_PREFIX:-knowledge}
       GOOGLE_APPLICATION_CREDENTIALS: ${GOOGLE_APPLICATION_CREDENTIALS:-}
+      RAG_ADMIN_USERS: ${RAG_ADMIN_USERS:-}
+      RAG_SYNC_ON_STARTUP: ${RAG_SYNC_ON_STARTUP:-true}
     # To mount a GCP service-account or ADC JSON file into the container:
     # volumes:
     #   - C:/Users/cyche/.gcp/currency-analyzer-storage.json:/run/secrets/gcp-key.json:ro

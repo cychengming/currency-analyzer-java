@@ -69,10 +69,19 @@ class RagDocumentServiceEdgeTests {
         );
         assertEquals("safe_name.md", RagDocumentService.sanitizeFilename("../../safe:name.md"));
 
-        RagDocumentService.StorageInfo info = service.storageInfo();
+        RagDocumentService.StorageInfo info = service.storageInfo(true);
         assertEquals("gcs", info.provider());
         assertEquals("currency-analyze", info.bucket());
         assertEquals("knowledge", info.defaultPrefix());
+        assertTrue(info.canManage());
+
+        assertEquals("knowledge/", service.resolveScopedPrefix(null));
+        assertEquals("knowledge/", service.resolveScopedPrefix("   "));
+        assertEquals("knowledge/", service.resolveScopedPrefix("knowledge"));
+        assertEquals("knowledge/concepts/", service.resolveScopedPrefix("knowledge/concepts"));
+        assertThrows(IllegalArgumentException.class, () -> service.resolveScopedPrefix("knowledge-other"));
+        assertThrows(IllegalArgumentException.class, () -> service.resolveScopedPrefix("other"));
+        assertThrows(IllegalArgumentException.class, () -> service.resolveScopedPrefix("knowledge/../secret"));
     }
 
     @Test
@@ -130,12 +139,20 @@ class RagDocumentServiceEdgeTests {
         );
         byte[] updatedBytes = "# Updated Title\nNew body content here.".getBytes(StandardCharsets.UTF_8);
 
-        when(storage.list("knowledge")).thenReturn(List.of(
+        when(storage.list("knowledge/")).thenReturn(List.of(
             new ObjectStorageClient.StoredObjectSummary("knowledge/existing.md", updatedBytes.length, "text/markdown", "2"),
             new ObjectStorageClient.StoredObjectSummary("knowledge/missing.md", 10L, "text/markdown", "1"),
             new ObjectStorageClient.StoredObjectSummary("knowledge/binary.txt", 4L, "text/plain", "1"),
             new ObjectStorageClient.StoredObjectSummary("knowledge/huge.md", 99_999L, "text/markdown", "1")
         ));
+        UUID removedId = UUID.randomUUID();
+        RagDocument removedDoc = new RagDocument(
+            removedId, RagDocument.SOURCE_UPLOAD, "deleted.md", "Deleted", "text/markdown; charset=utf-8",
+            20L, "del-sha", "gcs", "currency-analyze", "knowledge/deleted.md", "1",
+            RagDocument.STATUS_READY, 1, null, "alice", clock.instant(), clock.instant()
+        );
+        when(repository.findUploadsByPrefix("gcs", "knowledge/")).thenReturn(List.of(existingDoc, removedDoc));
+        when(repository.deleteById(removedId)).thenReturn(true);
         when(repository.findByStorage("gcs", "knowledge/existing.md")).thenReturn(Optional.of(existingDoc));
         when(repository.findByStorage("gcs", "knowledge/missing.md")).thenReturn(Optional.empty());
         when(repository.findByStorage("gcs", "knowledge/binary.txt")).thenReturn(Optional.empty());
@@ -150,6 +167,16 @@ class RagDocumentServiceEdgeTests {
         assertEquals(4, summary.scanned());
         assertEquals(1, summary.queued());
         assertEquals(3, summary.ignored());
+        assertEquals(1, summary.deleted());
+        verify(repository).deleteById(removedId);
+
+        RagStartupSyncRunner runner = new RagStartupSyncRunner(service);
+        when(repository.findStuckDocuments()).thenReturn(List.of());
+        runner.syncSafely();
+
+        RagDocumentService failingService = mock(RagDocumentService.class);
+        when(failingService.recoverStuckDocuments()).thenThrow(new StorageException("no creds"));
+        new RagStartupSyncRunner(failingService).syncSafely();
 
         UUID missingBlobDocId = UUID.randomUUID();
         RagDocument missingBlobDoc = new RagDocument(
@@ -177,6 +204,26 @@ class RagDocumentServiceEdgeTests {
         );
         assertEquals(HttpStatus.BAD_GATEWAY, storageErr.getStatusCode());
         assertEquals("GCS unreachable", storageErr.getBody().get("error"));
+
+        ResponseEntity<Map<String, Object>> forbidden = handler.forbidden(
+            new org.springframework.security.access.AccessDeniedException("Admin required"), request
+        );
+        assertEquals(HttpStatus.FORBIDDEN, forbidden.getStatusCode());
+        assertEquals("Admin required", forbidden.getBody().get("error"));
+
+        com.currencyanalyzer.auth.UserRepository userRepository = mock(com.currencyanalyzer.auth.UserRepository.class);
+        when(userRepository.findByUsername("admin")).thenReturn(Optional.of(
+            new com.currencyanalyzer.auth.UserAccount(1L, "admin", "hash", clock.instant())
+        ));
+        when(userRepository.findByUsername("alice")).thenReturn(Optional.of(
+            new com.currencyanalyzer.auth.UserAccount(2L, "alice", "hash", clock.instant())
+        ));
+        com.currencyanalyzer.auth.DatabaseUserDetailsService uds =
+            new com.currencyanalyzer.auth.DatabaseUserDetailsService(userRepository, "Admin, ops");
+        assertTrue(uds.loadUserByUsername("admin").getAuthorities().stream()
+            .anyMatch(a -> "ROLE_ADMIN".equals(a.getAuthority())));
+        assertTrue(uds.loadUserByUsername("alice").getAuthorities().stream()
+            .noneMatch(a -> "ROLE_ADMIN".equals(a.getAuthority())));
     }
 
     @Test

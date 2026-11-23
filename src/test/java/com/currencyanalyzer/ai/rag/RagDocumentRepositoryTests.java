@@ -48,22 +48,40 @@ class RagDocumentRepositoryTests {
             any(), any(), any(), any(), any()
         )).thenReturn(List.of(hit));
 
+        when(jdbcTemplate.update(
+            contains("WHERE id = ? AND sha256 = ?"),
+            any(), any(), any(), any(), eq(docId), eq("sha-v1")
+        )).thenReturn(1);
+        when(jdbcTemplate.update(
+            contains("WHERE id = ? AND sha256 = ?"),
+            any(), any(), any(), any(), eq(docId), eq("stale-sha")
+        )).thenReturn(0);
+
         RagDocumentRepository repository = new RagDocumentRepository(jdbcTemplate);
         assertTrue(repository.isPgVectorAvailable());
 
-        repository.replaceChunks(
+        assertTrue(repository.replaceChunks(
             docId,
+            "sha-v1",
             "Guide",
             List.of(
                 new RagDocumentRepository.ChunkRecord(0, "Intro", "Body content", new float[] {0.1f, 0.2f}),
                 new RagDocumentRepository.ChunkRecord(1, null, "Plain chunk", null)
             ),
             Instant.parse("2026-11-22T12:00:00Z")
-        );
+        ));
         verify(jdbcTemplate).update(
             contains("CAST(? AS vector)"),
             any(), eq(docId), eq(0), eq("Intro"), eq("Body content"), eq(12), eq("[0.1,0.2]"), any()
         );
+
+        assertFalse(repository.replaceChunks(
+            docId,
+            "stale-sha",
+            "Old Guide",
+            List.of(new RagDocumentRepository.ChunkRecord(0, "Old", "Stale body", null)),
+            Instant.parse("2026-11-22T12:00:00Z")
+        ));
 
         List<RagChunk.RagSearchHit> hits = repository.searchByVector(new float[] {0.1f, 0.2f}, 0.45, 5);
         assertEquals(1, hits.size());

@@ -13,8 +13,10 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicLong;
 
 @Service
 public class RagIngestionService {
@@ -22,11 +24,13 @@ public class RagIngestionService {
     private static final Logger log = LoggerFactory.getLogger(RagIngestionService.class);
     private static final int EMBEDDING_BATCH_SIZE = 16;
     private static final int INGESTION_CONCURRENCY = 2;
+    private static final int MAX_LEAD_WEIGHTED_UNITS = 64;
 
     private final RagDocumentRepository repository;
     private final DocumentParser documentParser;
     private final EmbeddingModel embeddingModel;
     private final Clock clock;
+    private final ConcurrentHashMap<UUID, AtomicLong> documentSequences = new ConcurrentHashMap<>();
     private final ExecutorService executor = Executors.newFixedThreadPool(INGESTION_CONCURRENCY, runnable -> {
         Thread thread = new Thread(runnable, "rag-ingestion");
         thread.setDaemon(true);
@@ -55,19 +59,66 @@ public class RagIngestionService {
         this.clock = clock;
     }
 
-    public CompletableFuture<Void> enqueue(UUID documentId, String filename, String titleOverride, byte[] rawBytes) {
+    public CompletableFuture<Void> enqueue(
+        UUID documentId,
+        String expectedSha256,
+        String filename,
+        String titleOverride,
+        byte[] rawBytes
+    ) {
+        long sequence = nextSequence(documentId);
         return CompletableFuture.runAsync(
-            () -> ingestNow(documentId, filename, titleOverride, rawBytes),
+            () -> ingestInternal(documentId, expectedSha256, sequence, filename, titleOverride, rawBytes),
             executor
         );
     }
 
-    public void ingestNow(UUID documentId, String filename, String titleOverride, byte[] rawBytes) {
+    public void ingestNow(
+        UUID documentId,
+        String expectedSha256,
+        String filename,
+        String titleOverride,
+        byte[] rawBytes
+    ) {
+        long sequence = nextSequence(documentId);
+        ingestInternal(documentId, expectedSha256, sequence, filename, titleOverride, rawBytes);
+    }
+
+    public void cancelPending(UUID documentId) {
+        nextSequence(documentId);
+    }
+
+    private void ingestInternal(
+        UUID documentId,
+        String expectedSha256,
+        long sequence,
+        String filename,
+        String titleOverride,
+        byte[] rawBytes
+    ) {
+        if (isSuperseded(documentId, sequence)) {
+            log.debug("Skipping superseded ingestion task for document {} ({})", documentId, filename);
+            return;
+        }
         try {
-            repository.updateStatus(documentId, RagDocument.STATUS_INDEXING, 0, null, clock.instant());
+            boolean claimed = repository.updateStatusIfMatches(
+                documentId, expectedSha256, RagDocument.STATUS_INDEXING, 0, null, clock.instant()
+            );
+            if (!claimed) {
+                log.debug("Skipping stale ingestion for document {} ({}): sha256 mismatch or deleted", documentId, filename);
+                return;
+            }
             DocumentParser.ParsedDocument parsed = documentParser.parse(filename, rawBytes, titleOverride);
+            if (isSuperseded(documentId, sequence)) {
+                log.debug("Aborting superseded ingestion after parse for document {} ({})", documentId, filename);
+                return;
+            }
             List<DocumentParser.ParsedChunk> chunks = parsed.chunks();
             List<float[]> vectors = embedAll(parsed.title(), chunks);
+            if (isSuperseded(documentId, sequence)) {
+                log.debug("Aborting superseded ingestion after embed for document {} ({})", documentId, filename);
+                return;
+            }
 
             List<RagDocumentRepository.ChunkRecord> records = new ArrayList<>(chunks.size());
             for (int index = 0; index < chunks.size(); index++) {
@@ -80,19 +131,37 @@ public class RagIngestionService {
                     embedding
                 ));
             }
-            repository.replaceChunks(documentId, parsed.title(), records, clock.instant());
-            log.info("Indexed RAG document {} ({}) into {} chunks", documentId, filename, records.size());
+            boolean applied = repository.replaceChunks(documentId, expectedSha256, parsed.title(), records, clock.instant());
+            if (applied) {
+                log.info("Indexed RAG document {} ({}) into {} chunks", documentId, filename, records.size());
+            } else {
+                log.info("Skipped writing stale chunks for document {} ({})", documentId, filename);
+            }
         } catch (RuntimeException exception) {
+            if (isSuperseded(documentId, sequence)) {
+                return;
+            }
             log.warn("Failed to index RAG document {} ({}): {}", documentId, filename, exception.getMessage());
             String message = exception.getMessage() == null || exception.getMessage().isBlank()
                 ? exception.getClass().getSimpleName()
                 : exception.getMessage();
             try {
-                repository.updateStatus(documentId, RagDocument.STATUS_FAILED, 0, message, clock.instant());
+                repository.updateStatusIfMatches(
+                    documentId, expectedSha256, RagDocument.STATUS_FAILED, 0, message, clock.instant()
+                );
             } catch (RuntimeException updateException) {
                 log.debug("Unable to persist FAILED status for document {}", documentId, updateException);
             }
         }
+    }
+
+    private long nextSequence(UUID documentId) {
+        return documentSequences.computeIfAbsent(documentId, ignored -> new AtomicLong()).incrementAndGet();
+    }
+
+    private boolean isSuperseded(UUID documentId, long sequence) {
+        AtomicLong latest = documentSequences.get(documentId);
+        return latest != null && latest.get() != sequence;
     }
 
     private List<float[]> embedAll(String documentTitle, List<DocumentParser.ParsedChunk> chunks) {
@@ -123,7 +192,7 @@ public class RagIngestionService {
         }
     }
 
-    private static String extractDocumentLead(List<DocumentParser.ParsedChunk> chunks) {
+    static String extractDocumentLead(List<DocumentParser.ParsedChunk> chunks) {
         if (chunks.isEmpty()) {
             return "";
         }
@@ -132,7 +201,17 @@ public class RagIngestionService {
             return "";
         }
         String singleLine = first.replaceAll("\\s+", " ").strip();
-        return singleLine.length() <= 140 ? singleLine : singleLine.substring(0, 140);
+        int used = 0;
+        int end = 0;
+        while (end < singleLine.length()) {
+            int weight = TextDocumentParser.charWeight(singleLine.charAt(end));
+            if (used + weight > MAX_LEAD_WEIGHTED_UNITS && end > 0) {
+                break;
+            }
+            used += weight;
+            end++;
+        }
+        return singleLine.substring(0, end).strip();
     }
 
     private static String embeddingInput(String documentTitle, String documentLead, DocumentParser.ParsedChunk chunk) {

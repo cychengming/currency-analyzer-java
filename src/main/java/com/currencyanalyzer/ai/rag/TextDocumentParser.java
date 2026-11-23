@@ -25,8 +25,8 @@ public class TextDocumentParser implements DocumentParser {
     private final int maxChunksPerDocument;
 
     public TextDocumentParser(
-        @Value("${app.rag.chunk-max-chars:600}") int chunkMaxChars,
-        @Value("${app.rag.chunk-overlap-chars:100}") int chunkOverlapChars,
+        @Value("${app.rag.chunk-max-chars:520}") int chunkMaxChars,
+        @Value("${app.rag.chunk-overlap-chars:80}") int chunkOverlapChars,
         @Value("${app.rag.max-chunks-per-document:500}") int maxChunksPerDocument
     ) {
         this.chunkMaxChars = Math.max(120, chunkMaxChars);
@@ -291,14 +291,14 @@ public class TextDocumentParser implements DocumentParser {
 
     private List<String> splitWithOverlap(String text) {
         String cleaned = text.strip();
-        if (cleaned.length() <= chunkMaxChars) {
+        if (weightedLength(cleaned) <= chunkMaxChars) {
             return List.of(cleaned);
         }
         List<String> result = new ArrayList<>();
         int start = 0;
         int length = cleaned.length();
         while (start < length) {
-            int maxEnd = Math.min(length, start + chunkMaxChars);
+            int maxEnd = indexAtBudget(cleaned, start, chunkMaxChars);
             int end = maxEnd;
             if (maxEnd < length) {
                 end = bestBreakPoint(cleaned, start, maxEnd);
@@ -310,7 +310,7 @@ public class TextDocumentParser implements DocumentParser {
             if (end >= length) {
                 break;
             }
-            int nextStart = Math.max(start + 1, end - chunkOverlapChars);
+            int nextStart = rewindByBudget(cleaned, start, end, chunkOverlapChars);
             if (nextStart < length && cleaned.charAt(nextStart) != '\n') {
                 int spaceAfter = cleaned.indexOf(' ', nextStart);
                 if (spaceAfter > nextStart && spaceAfter < end) {
@@ -323,7 +323,7 @@ public class TextDocumentParser implements DocumentParser {
     }
 
     private int bestBreakPoint(String text, int start, int maxEnd) {
-        int minimumAcceptable = start + (chunkMaxChars / 2);
+        int minimumAcceptable = start + Math.max(1, (maxEnd - start) / 2);
         int doubleNewline = text.lastIndexOf("\n\n", maxEnd);
         if (doubleNewline >= minimumAcceptable) {
             return doubleNewline;
@@ -343,6 +343,46 @@ public class TextDocumentParser implements DocumentParser {
             return space;
         }
         return maxEnd;
+    }
+
+    static int weightedLength(String text) {
+        int total = 0;
+        for (int index = 0; index < text.length(); index++) {
+            total += charWeight(text.charAt(index));
+        }
+        return total;
+    }
+
+    static int charWeight(char c) {
+        return c >= 0x2E80 ? 2 : 1;
+    }
+
+    private static int indexAtBudget(String text, int start, int budget) {
+        int used = 0;
+        int index = start;
+        int len = text.length();
+        while (index < len) {
+            int weight = charWeight(text.charAt(index));
+            if (used + weight > budget && index > start) {
+                break;
+            }
+            used += weight;
+            index++;
+        }
+        return index;
+    }
+
+    private static int rewindByBudget(String text, int minStart, int end, int overlapBudget) {
+        if (overlapBudget <= 0) {
+            return end;
+        }
+        int used = 0;
+        int index = end;
+        while (index > minStart + 1 && used < overlapBudget) {
+            index--;
+            used += charWeight(text.charAt(index));
+        }
+        return Math.max(minStart + 1, index);
     }
 
     private static String decodeUtf8(byte[] rawBytes) {

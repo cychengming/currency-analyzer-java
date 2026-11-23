@@ -102,32 +102,64 @@ public class RagDocumentRepository {
         );
     }
 
-    public void updateStatus(UUID id, String status, int chunkCount, String errorMessage, Instant now) {
-        jdbcTemplate.update("""
+    public boolean updateStatusIfMatches(
+        UUID id,
+        String expectedSha256,
+        String status,
+        int chunkCount,
+        String errorMessage,
+        Instant now
+    ) {
+        int updated = jdbcTemplate.update("""
                 UPDATE rag_documents
                 SET status = ?, chunk_count = ?, error_message = ?, updated_at = ?
-                WHERE id = ?
+                WHERE id = ? AND sha256 = ?
                 """,
             status,
             chunkCount,
             truncateError(errorMessage),
             OffsetDateTime.ofInstant(now, ZoneOffset.UTC),
-            id
+            id,
+            expectedSha256
+        );
+        return updated > 0;
+    }
+
+    public List<RagDocument> findUploadsByPrefix(String storageProvider, String prefixWithTrailingSlash) {
+        String likePattern = prefixWithTrailingSlash == null || prefixWithTrailingSlash.isEmpty()
+            ? "%"
+            : escapeLike(prefixWithTrailingSlash) + "%";
+        return jdbcTemplate.query("""
+                SELECT id, source, filename, title, content_type, size_bytes, sha256,
+                       storage_provider, storage_bucket, storage_key, storage_generation,
+                       status, chunk_count, error_message, uploaded_by, created_at, updated_at
+                FROM rag_documents
+                WHERE source = 'upload'
+                  AND storage_provider = ?
+                  AND storage_key LIKE ? ESCAPE '\\'
+                ORDER BY storage_key ASC
+                """,
+            (rs, rowNum) -> mapDocument(rs),
+            storageProvider,
+            likePattern
         );
     }
 
-    public void updateTitleAndStatus(UUID id, String title, String status, int chunkCount, Instant now) {
-        jdbcTemplate.update("""
-                UPDATE rag_documents
-                SET title = ?, status = ?, chunk_count = ?, error_message = NULL, updated_at = ?
-                WHERE id = ?
+    public List<RagDocument> findStuckDocuments() {
+        return jdbcTemplate.query("""
+                SELECT id, source, filename, title, content_type, size_bytes, sha256,
+                       storage_provider, storage_bucket, storage_key, storage_generation,
+                       status, chunk_count, error_message, uploaded_by, created_at, updated_at
+                FROM rag_documents
+                WHERE status IN ('PENDING', 'INDEXING')
+                ORDER BY created_at ASC
                 """,
-            title,
-            status,
-            chunkCount,
-            OffsetDateTime.ofInstant(now, ZoneOffset.UTC),
-            id
+            (rs, rowNum) -> mapDocument(rs)
         );
+    }
+
+    private static String escapeLike(String value) {
+        return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_");
     }
 
     public List<RagDocument> findAll() {
@@ -190,9 +222,30 @@ public class RagDocumentRepository {
     }
 
     @Transactional
-    public void replaceChunks(UUID documentId, String resolvedTitle, List<ChunkRecord> chunks, Instant now) {
-        jdbcTemplate.update("DELETE FROM rag_chunks WHERE document_id = ?", documentId);
+    public boolean replaceChunks(
+        UUID documentId,
+        String expectedSha256,
+        String resolvedTitle,
+        List<ChunkRecord> chunks,
+        Instant now
+    ) {
         OffsetDateTime timestamp = OffsetDateTime.ofInstant(now, ZoneOffset.UTC);
+        int updated = jdbcTemplate.update("""
+                UPDATE rag_documents
+                SET title = ?, status = ?, chunk_count = ?, error_message = NULL, updated_at = ?
+                WHERE id = ? AND sha256 = ?
+                """,
+            resolvedTitle,
+            RagDocument.STATUS_READY,
+            chunks.size(),
+            timestamp,
+            documentId,
+            expectedSha256
+        );
+        if (updated == 0) {
+            return false;
+        }
+        jdbcTemplate.update("DELETE FROM rag_chunks WHERE document_id = ?", documentId);
         boolean vectorEnabled = isPgVectorAvailable();
         for (ChunkRecord chunk : chunks) {
             UUID chunkId = UUID.randomUUID();
@@ -226,7 +279,7 @@ public class RagDocumentRepository {
                 );
             }
         }
-        updateTitleAndStatus(documentId, resolvedTitle, RagDocument.STATUS_READY, chunks.size(), now);
+        return true;
     }
 
     public List<RagChunk.RagSearchHit> searchByVector(float[] queryVector, double similarityThreshold, int limit) {

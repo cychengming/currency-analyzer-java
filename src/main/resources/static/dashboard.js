@@ -916,7 +916,7 @@ function loadPages() {
                         <div class="rag-subpanel-title">Sync Bucket &amp; Refresh</div>
                         <div class="form-group" style="margin:0;">
                             <label for="ragSyncPrefix">Bucket Prefix</label>
-                            <input type="text" id="ragSyncPrefix" placeholder="e.g. knowledge (leave blank for all)">
+                            <input type="text" id="ragSyncPrefix" placeholder="e.g. knowledge or knowledge/concepts">
                             <div class="field-hint">Imports new or updated .md, .txt, and .csv files from GCS.</div>
                         </div>
                         <div class="panel-actions" style="margin-top: auto;">

@@ -206,7 +206,7 @@ class AiConversationControllerTests {
             now,
             now
         ));
-        ragIngestionService.ingestNow(docId, "kelly.md", null, content);
+        ragIngestionService.ingestNow(docId, "test-sha-kelly", "kelly.md", null, content);
         try {
             MvcResult created = mockMvc.perform(post("/api/ai/conversations")
                     .with(user("knowledge-user"))

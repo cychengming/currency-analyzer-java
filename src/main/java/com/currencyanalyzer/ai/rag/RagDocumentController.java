@@ -1,11 +1,14 @@
 package com.currencyanalyzer.ai.rag;
 
+import com.currencyanalyzer.auth.DatabaseUserDetailsService;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.ContentDisposition;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -19,8 +22,10 @@ import org.springframework.web.multipart.MultipartFile;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 @RestController
@@ -30,15 +35,21 @@ public class RagDocumentController {
 
     private final RagDocumentService documentService;
     private final RagChunkRetriever chunkRetriever;
+    private final Set<String> adminUsers;
 
-    public RagDocumentController(RagDocumentService documentService, RagChunkRetriever chunkRetriever) {
+    public RagDocumentController(
+        RagDocumentService documentService,
+        RagChunkRetriever chunkRetriever,
+        @Value("${app.rag.admin-users:}") String adminUsersCsv
+    ) {
         this.documentService = documentService;
         this.chunkRetriever = chunkRetriever;
+        this.adminUsers = DatabaseUserDetailsService.parseAdminUsers(adminUsersCsv);
     }
 
     @GetMapping("/info")
-    public RagDocumentService.StorageInfo info() {
-        return documentService.storageInfo();
+    public RagDocumentService.StorageInfo info(Authentication authentication) {
+        return documentService.storageInfo(isAdmin(authentication));
     }
 
     @GetMapping("/documents")
@@ -59,6 +70,7 @@ public class RagDocumentController {
         @RequestParam("file") MultipartFile file,
         @RequestParam(value = "title", required = false) String title
     ) throws IOException {
+        requireAdmin(authentication);
         if (file == null || file.isEmpty()) {
             throw new IllegalArgumentException("Uploaded file must not be empty");
         }
@@ -66,7 +78,7 @@ public class RagDocumentController {
             file.getOriginalFilename(),
             file.getBytes(),
             title,
-            authentication == null ? "system" : authentication.getName()
+            authentication.getName()
         );
         return ResponseEntity.status(HttpStatus.ACCEPTED).body(created);
     }
@@ -76,15 +88,17 @@ public class RagDocumentController {
         Authentication authentication,
         @RequestParam(value = "prefix", required = false) String prefix
     ) {
-        RagSyncSummary summary = documentService.syncFromStorage(
-            prefix,
-            authentication == null ? "system" : authentication.getName()
-        );
+        requireAdmin(authentication);
+        RagSyncSummary summary = documentService.syncFromStorage(prefix, authentication.getName());
         return ResponseEntity.status(HttpStatus.ACCEPTED).body(summary);
     }
 
     @PostMapping("/documents/{id}/reindex")
-    public ResponseEntity<RagDocument> reindex(@PathVariable UUID id) {
+    public ResponseEntity<RagDocument> reindex(
+        Authentication authentication,
+        @PathVariable UUID id
+    ) {
+        requireAdmin(authentication);
         return documentService.reindex(id)
             .map(doc -> ResponseEntity.status(HttpStatus.ACCEPTED).body(doc))
             .orElseGet(() -> ResponseEntity.notFound().build());
@@ -107,7 +121,11 @@ public class RagDocumentController {
     }
 
     @DeleteMapping("/documents/{id}")
-    public ResponseEntity<Map<String, Object>> delete(@PathVariable UUID id) {
+    public ResponseEntity<Map<String, Object>> delete(
+        Authentication authentication,
+        @PathVariable UUID id
+    ) {
+        requireAdmin(authentication);
         if (!documentService.delete(id)) {
             return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of(
                 "success", false,
@@ -132,5 +150,25 @@ public class RagDocumentController {
             "count", hits.size(),
             "hits", hits
         );
+    }
+
+    private void requireAdmin(Authentication authentication) {
+        if (!isAdmin(authentication)) {
+            throw new AccessDeniedException("Admin privileges are required to modify the shared knowledge base");
+        }
+    }
+
+    private boolean isAdmin(Authentication authentication) {
+        if (authentication == null || !authentication.isAuthenticated()) {
+            return false;
+        }
+        boolean hasAdminRole = authentication.getAuthorities() != null
+            && authentication.getAuthorities().stream()
+                .anyMatch(authority -> "ROLE_ADMIN".equals(authority.getAuthority()));
+        if (hasAdminRole) {
+            return true;
+        }
+        String name = authentication.getName();
+        return name != null && adminUsers.contains(name.trim().toLowerCase(Locale.ROOT));
     }
 }
