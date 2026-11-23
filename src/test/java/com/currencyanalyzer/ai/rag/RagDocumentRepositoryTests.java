@@ -128,6 +128,58 @@ class RagDocumentRepositoryTests {
         when(noDs.getDataSource()).thenReturn(null);
         RagDocumentRepository repo = new RagDocumentRepository(noDs);
         assertFalse(repo.isPgVectorAvailable());
+        assertFalse(repo.isPgTrgmAvailable());
         assertTrue(repo.searchByVector(new float[] {1f}, 0.45, 3).isEmpty());
+    }
+
+    @Test
+    void detectsPgTrgmRunsParameterizedLexicalQueryAndSupportsTargetedSiblingLookup() throws Exception {
+        JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
+        DataSource dataSource = mock(DataSource.class);
+        Connection connection = mock(Connection.class);
+        DatabaseMetaData metaData = mock(DatabaseMetaData.class);
+
+        when(jdbcTemplate.getDataSource()).thenReturn(dataSource);
+        when(dataSource.getConnection()).thenReturn(connection);
+        when(connection.getMetaData()).thenReturn(metaData);
+        when(metaData.getDatabaseProductName()).thenReturn("PostgreSQL");
+        when(jdbcTemplate.queryForObject(contains("pg_extension"), eq(Integer.class)))
+            .thenThrow(new RuntimeException("transient glitch"))
+            .thenReturn(1);
+
+        UUID docId = UUID.randomUUID();
+        RagDocumentRepository.ReadyChunk chunk = new RagDocumentRepository.ReadyChunk(
+            docId, "Kelly Guide", "kelly.md", "upload", 0, "Sizing", "Kelly criterion sizing"
+        );
+        when(jdbcTemplate.query(
+            contains("word_similarity"),
+            any(RowMapper.class),
+            any(Object[].class)
+        )).thenReturn(List.of(chunk));
+        when(jdbcTemplate.query(
+            contains("AND d.id IN (?)"),
+            any(RowMapper.class),
+            any(Object[].class)
+        )).thenReturn(List.of(chunk));
+
+        RagDocumentRepository repository = new RagDocumentRepository(jdbcTemplate);
+        assertFalse(repository.isPgTrgmAvailable());
+        assertTrue(repository.isPgTrgmAvailable());
+        assertTrue(repository.isPgTrgmAvailable());
+
+        List<RagDocumentRepository.ReadyChunk> candidates =
+            repository.searchLexicalCandidates("kelly sizing", List.of("kelly", "sizing"), 20);
+        assertEquals(1, candidates.size());
+        assertEquals(docId, candidates.getFirst().documentId());
+
+        assertTrue(repository.searchLexicalCandidates("   ", List.of(), 20).isEmpty());
+        assertTrue(repository.searchLexicalCandidates("kelly", List.of(), 0).isEmpty());
+
+        List<RagDocumentRepository.ReadyChunk> siblings = repository.findReadyChunksByDocumentIds(List.of(docId));
+        assertEquals(1, siblings.size());
+        assertTrue(repository.findReadyChunksByDocumentIds(List.of()).isEmpty());
+        assertTrue(repository.findReadyChunksByDocumentIds(null).isEmpty());
+
+        assertEquals("%100\\%\\_\\\\test%", RagDocumentRepository.toLikePattern("100%_\\test"));
     }
 }

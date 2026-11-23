@@ -4,6 +4,7 @@ import com.currencyanalyzer.ai.knowledge.KnowledgeNote;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.embedding.EmbeddingModel;
 
+import java.util.Collection;
 import java.util.List;
 import java.util.UUID;
 
@@ -13,19 +14,42 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyDouble;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class RagChunkRetrieverTests {
 
     @Test
-    void fusesVectorAndLexicalHitsAndDownRanksStubsAndChangelogs() {
+    void fusesVectorAndLexicalHitsWithRrfExpandsSiblingsByIdAndDownRanksStubsAndChangelogs() {
         RagDocumentRepository repository = mock(RagDocumentRepository.class);
         EmbeddingModel embeddingModel = mock(EmbeddingModel.class);
 
         UUID howardId = UUID.randomUUID();
         UUID stubId = UUID.randomUUID();
         UUID changelogId = UUID.randomUUID();
+
+        RagDocumentRepository.ReadyChunk howardIntro = new RagDocumentRepository.ReadyChunk(
+            howardId,
+            "霍华德·马克斯",
+            "howard.md",
+            "upload",
+            0,
+            "基本信息",
+            "Howard Marks 是 Oaktree 创始人，从1990年起撰写投资备忘录，专注周期与风险控制。"
+        );
+        RagDocumentRepository.ReadyChunk howardSecondLevel = new RagDocumentRepository.ReadyChunk(
+            howardId,
+            "霍华德·马克斯",
+            "howard.md",
+            "upload",
+            1,
+            "第二层次思维",
+            "第二层次思维要求比市场共识想得更深，不仅判断公司是否优秀，还要评估价格是否已充分反映共识，从而在偏离时寻找不对称机会。"
+        );
 
         when(repository.isPgVectorAvailable()).thenReturn(true);
         when(embeddingModel.embed("Howard Marks")).thenReturn(new float[] {1f, 0f});
@@ -34,9 +58,10 @@ class RagChunkRetrieverTests {
             new RagChunk.RagSearchHit(howardId, "霍华德·马克斯", "howard.md", "upload", 0, "基本信息", "Howard Marks 是 Oaktree 创始人，专注周期与风险控制。", 0.60),
             new RagChunk.RagSearchHit(changelogId, "更新日志", "changelog.md", "upload", 0, "2026-05-16", "新增 howard-marks 备忘录索引与归档说明内容。", 0.55)
         ));
-        when(repository.findAllReadyChunks()).thenReturn(List.of(
-            new RagDocumentRepository.ReadyChunk(howardId, "霍华德·马克斯", "howard.md", "upload", 0, "基本信息", "Howard Marks 是 Oaktree 创始人，从1990年起撰写投资备忘录，专注周期与风险控制。"),
-            new RagDocumentRepository.ReadyChunk(howardId, "霍华德·马克斯", "howard.md", "upload", 1, "第二层次思维", "第二层次思维要求比市场共识想得更深，不仅判断公司是否优秀，还要评估价格是否已充分反映共识，从而在偏离时寻找不对称机会。")
+        when(repository.searchLexicalCandidates(anyString(), anyList(), anyInt())).thenReturn(List.of(howardIntro));
+        when(repository.findReadyChunksByDocumentIds(any(Collection.class))).thenReturn(List.of(
+            howardIntro,
+            howardSecondLevel
         ));
 
         RagChunkRetriever retriever = new RagChunkRetriever(repository, embeddingModel, 0.45);
@@ -46,6 +71,8 @@ class RagChunkRetrieverTests {
         assertEquals(howardId, hits.getFirst().documentId());
         assertTrue(hits.stream().anyMatch(hit -> "第二层次思维".equals(hit.heading())));
         assertTrue(hits.stream().noneMatch(hit -> stubId.equals(hit.documentId())));
+        verify(repository, never()).findAllReadyChunks();
+        verify(repository).findReadyChunksByDocumentIds(any(Collection.class));
 
         List<KnowledgeNote> notes = retriever.retrieveAsNotes("Howard Marks", 2);
         assertEquals(2, notes.size());
@@ -60,7 +87,7 @@ class RagChunkRetrieverTests {
 
         when(repository.isPgVectorAvailable()).thenReturn(true);
         when(embeddingModel.embed(any(String.class))).thenThrow(new IllegalStateException("onnx failed"));
-        when(repository.findAllReadyChunks()).thenReturn(List.of(
+        when(repository.searchLexicalCandidates(anyString(), anyList(), anyInt())).thenReturn(List.of(
             new RagDocumentRepository.ReadyChunk(docId, "Kelly Sizing", "kelly.md", "upload", 0, "Kelly Sizing", "Kelly criterion optimizes position sizing under known edge.")
         ));
 
@@ -86,12 +113,46 @@ class RagChunkRetrieverTests {
         when(repository.searchByVector(any(float[].class), anyDouble(), anyInt())).thenReturn(List.of(
             new RagChunk.RagSearchHit(docId, "仓位管理", "pos.md", "upload", 0, "核心原则", "单笔风险占账户总资金的比例不应超过百分之一，并结合历史波动率与ATR指标动态调整止损距离，避免连续回撤对本金造成不可逆伤害。", 0.66)
         ));
-        when(repository.findAllReadyChunks()).thenReturn(List.of());
+        when(repository.searchLexicalCandidates(anyString(), anyList(), anyInt())).thenReturn(List.of());
 
         RagChunkRetriever retriever = new RagChunkRetriever(repository, embeddingModel, 0.45);
         List<RagChunk.RagSearchHit> hits = retriever.search("risk per trade", 3);
 
         assertEquals(1, hits.size());
         assertEquals("仓位管理 — 核心原则", hits.getFirst().displayTitle());
+    }
+
+    @Test
+    void rrfPromotesDualRankerOverlapRegardlessOfRawScores() {
+        UUID dualId = UUID.randomUUID();
+        UUID vectorOnlyId = UUID.randomUUID();
+        UUID lexicalOnlyId = UUID.randomUUID();
+
+        RagChunk.RagSearchHit vectorTop = new RagChunk.RagSearchHit(
+            vectorOnlyId, "Vector Only", "v.md", "upload", 0, "Section",
+            "Substantive vector-only chunk discussing foreign exchange volatility regimes in detail.", 0.99
+        );
+        RagChunk.RagSearchHit dualHitVector = new RagChunk.RagSearchHit(
+            dualId, "Dual Match", "d.md", "upload", 0, "Section",
+            "Substantive dual-match chunk covering Kelly criterion and position sizing rules.", 0.51
+        );
+        RagChunk.RagSearchHit dualHitLexical = new RagChunk.RagSearchHit(
+            dualId, "Dual Match", "d.md", "upload", 0, "Section",
+            "Substantive dual-match chunk covering Kelly criterion and position sizing rules.", 0.55
+        );
+        RagChunk.RagSearchHit lexicalSecond = new RagChunk.RagSearchHit(
+            lexicalOnlyId, "Lexical Only", "l.md", "upload", 0, "Section",
+            "Substantive lexical-only chunk mentioning Kelly formula without broader context.", 0.95
+        );
+
+        List<RagChunk.RagSearchHit> fused = RagChunkRetriever.fuseWithRrf(
+            List.of(vectorTop, dualHitVector),
+            List.of(dualHitLexical, lexicalSecond)
+        );
+
+        assertEquals(3, fused.size());
+        assertEquals(dualId, fused.getFirst().documentId());
+        assertTrue(fused.getFirst().score() > 0.95);
+        assertTrue(fused.get(1).score() <= 0.51);
     }
 }

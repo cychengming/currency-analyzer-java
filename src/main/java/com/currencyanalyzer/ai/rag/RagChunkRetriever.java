@@ -14,9 +14,11 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 @Component
@@ -27,6 +29,7 @@ public class RagChunkRetriever {
     private static final int MIN_EXPANSION_CHARS = 45;
     private static final double STRONG_MATCH_THRESHOLD = 0.70;
     private static final double MAX_SCORE_GAP_BELOW_STRONG_TOP = 0.18;
+    static final int RRF_K = 60;
 
     private final RagDocumentRepository repository;
     private final EmbeddingModel embeddingModel;
@@ -58,9 +61,8 @@ public class RagChunkRetriever {
         String trimmed = query.strip();
         int candidateLimit = Math.max(limit * 4, 24);
 
-        List<RagDocumentRepository.ReadyChunk> allChunks = repository.findAllReadyChunks();
         List<RagChunk.RagSearchHit> vectorHits = vectorSearch(trimmed, candidateLimit);
-        List<RagChunk.RagSearchHit> lexicalHits = keywordSearch(trimmed, allChunks, candidateLimit);
+        List<RagChunk.RagSearchHit> lexicalHits = lexicalSearch(trimmed, candidateLimit);
 
         List<RagChunk.RagSearchHit> fused;
         if (vectorHits.isEmpty()) {
@@ -71,10 +73,10 @@ public class RagChunkRetriever {
                 .sorted(hitComparator())
                 .toList();
         } else {
-            fused = fuseHybrid(vectorHits, lexicalHits);
+            fused = fuseWithRrf(vectorHits, lexicalHits);
         }
 
-        List<RagChunk.RagSearchHit> expanded = expandStrongDocuments(fused, allChunks, limit);
+        List<RagChunk.RagSearchHit> expanded = expandStrongDocuments(fused, limit);
         return filterAndLimit(expanded, limit);
     }
 
@@ -101,43 +103,50 @@ public class RagChunkRetriever {
         }
     }
 
-    private List<RagChunk.RagSearchHit> fuseHybrid(
+    /**
+     * Combines vector and lexical rankings with Reciprocal Rank Fusion (RRF),
+     * operating purely on rank positions so retrieval requires no cross-ranker score calibration.
+     */
+    static List<RagChunk.RagSearchHit> fuseWithRrf(
         List<RagChunk.RagSearchHit> vectorHits,
         List<RagChunk.RagSearchHit> lexicalHits
     ) {
-        Map<ChunkKey, FusedCandidate> candidates = new LinkedHashMap<>();
+        Map<ChunkKey, RrfCandidate> candidates = new LinkedHashMap<>();
 
-        for (RagChunk.RagSearchHit hit : vectorHits) {
+        for (int index = 0; index < vectorHits.size(); index++) {
+            RagChunk.RagSearchHit hit = vectorHits.get(index);
             ChunkKey key = new ChunkKey(hit.documentId(), hit.chunkIndex());
-            double adjustedVector = adjustHitScore(hit.documentTitle(), hit.filename(), hit.content(), hit.score());
-            candidates.put(key, new FusedCandidate(hit, adjustedVector, 0.0));
+            int rank = index + 1;
+            candidates.put(key, new RrfCandidate(hit, rank, 0));
         }
 
-        for (RagChunk.RagSearchHit hit : lexicalHits) {
+        for (int index = 0; index < lexicalHits.size(); index++) {
+            RagChunk.RagSearchHit hit = lexicalHits.get(index);
             ChunkKey key = new ChunkKey(hit.documentId(), hit.chunkIndex());
-            FusedCandidate existing = candidates.get(key);
+            int rank = index + 1;
+            RrfCandidate existing = candidates.get(key);
             if (existing != null) {
-                candidates.put(key, new FusedCandidate(existing.hit(), existing.vectorScore(), hit.score()));
+                RagChunk.RagSearchHit preferred = preferredHit(existing.hit(), hit);
+                candidates.put(key, new RrfCandidate(preferred, existing.vectorRank(), rank));
             } else {
-                candidates.put(key, new FusedCandidate(hit, 0.0, hit.score()));
+                candidates.put(key, new RrfCandidate(hit, 0, rank));
             }
         }
 
+        double maxDualRrf = 2.0 / (RRF_K + 1.0);
         return candidates.values().stream()
             .map(candidate -> {
-                double combined;
-                if (candidate.vectorScore() > 0 && candidate.lexicalScore() > 0) {
-                    combined = Math.min(
-                        1.0,
-                        Math.max(candidate.vectorScore(), candidate.lexicalScore())
-                            + 0.18 * Math.min(candidate.vectorScore(), candidate.lexicalScore())
-                    );
-                } else if (candidate.lexicalScore() > 0) {
-                    combined = candidate.lexicalScore();
-                } else {
-                    combined = candidate.vectorScore();
+                double rawRrf = 0.0;
+                if (candidate.vectorRank() > 0) {
+                    rawRrf += 1.0 / (RRF_K + candidate.vectorRank());
                 }
-                return withScore(candidate.hit(), combined);
+                if (candidate.lexicalRank() > 0) {
+                    rawRrf += 1.0 / (RRF_K + candidate.lexicalRank());
+                }
+                double normalized = Math.min(1.0, rawRrf / maxDualRrf);
+                RagChunk.RagSearchHit hit = candidate.hit();
+                double adjusted = adjustHitScore(hit.documentTitle(), hit.filename(), hit.content(), normalized);
+                return withScore(hit, adjusted);
             })
             .sorted(hitComparator())
             .toList();
@@ -146,26 +155,30 @@ public class RagChunkRetriever {
     /**
      * When a query strongly identifies a primary document (for example an English entity name
      * inside a Chinese profile's intro section), also surface that document's substantive core
-     * chunks so multi-section documents are well represented even across languages.
+     * chunks via a targeted document-ID query instead of scanning the entire table.
      */
     private List<RagChunk.RagSearchHit> expandStrongDocuments(
         List<RagChunk.RagSearchHit> ranked,
-        List<RagDocumentRepository.ReadyChunk> allChunks,
         int limit
     ) {
-        if (ranked.isEmpty() || allChunks.isEmpty()) {
+        if (ranked.isEmpty()) {
             return ranked;
         }
         Map<UUID, Double> strongDocScores = new HashMap<>();
         for (RagChunk.RagSearchHit hit : ranked) {
             if (hit.score() >= STRONG_MATCH_THRESHOLD && !isChangelogLike(hit.documentTitle(), hit.filename())) {
-                // Prefer documents where the match occurs in the intro/profile (chunk 0 or 1) or title
                 if (hit.chunkIndex() <= 1 || hit.score() >= 0.80) {
                     strongDocScores.merge(hit.documentId(), hit.score(), Math::max);
                 }
             }
         }
         if (strongDocScores.isEmpty()) {
+            return ranked;
+        }
+
+        List<RagDocumentRepository.ReadyChunk> siblingChunks =
+            repository.findReadyChunksByDocumentIds(strongDocScores.keySet());
+        if (siblingChunks == null || siblingChunks.isEmpty()) {
             return ranked;
         }
 
@@ -176,7 +189,7 @@ public class RagChunkRetriever {
 
         int maxSiblingsPerDoc = Math.max(1, limit - 1);
         Map<UUID, Integer> addedPerDoc = new HashMap<>();
-        for (RagDocumentRepository.ReadyChunk chunk : allChunks) {
+        for (RagDocumentRepository.ReadyChunk chunk : siblingChunks) {
             Double parentScore = strongDocScores.get(chunk.documentId());
             if (parentScore == null) {
                 continue;
@@ -212,16 +225,45 @@ public class RagChunkRetriever {
             .toList();
     }
 
-    private List<RagChunk.RagSearchHit> keywordSearch(
-        String query,
-        List<RagDocumentRepository.ReadyChunk> allChunks,
-        int limit
-    ) {
+    private List<RagChunk.RagSearchHit> lexicalSearch(String query, int limit) {
         String normalized = query.toLowerCase(Locale.ROOT).replaceAll("\\s+", " ").trim();
         List<String> phrases = KnowledgeRetriever.cjkPhrases(normalized);
         List<String> tokens = KnowledgeRetriever.latinTokens(normalized);
+        List<String> sqlTerms = buildSqlTerms(phrases, tokens);
+        int sqlCandidateLimit = Math.max(limit * 3, 60);
+
+        List<RagDocumentRepository.ReadyChunk> candidates =
+            repository.searchLexicalCandidates(normalized, sqlTerms, sqlCandidateLimit);
+        if (candidates == null || candidates.isEmpty()) {
+            return List.of();
+        }
+        return scoreLexicalCandidates(normalized, phrases, tokens, candidates, limit);
+    }
+
+    private static List<String> buildSqlTerms(List<String> phrases, List<String> tokens) {
+        Set<String> terms = new LinkedHashSet<>();
+        for (String phrase : phrases) {
+            if (phrase.length() >= 2) {
+                terms.add(phrase);
+            }
+        }
+        for (String token : tokens) {
+            if (token.length() >= 2) {
+                terms.add(token);
+            }
+        }
+        return List.copyOf(terms);
+    }
+
+    private List<RagChunk.RagSearchHit> scoreLexicalCandidates(
+        String normalized,
+        List<String> phrases,
+        List<String> tokens,
+        List<RagDocumentRepository.ReadyChunk> candidates,
+        int limit
+    ) {
         List<RagChunk.RagSearchHit> scored = new ArrayList<>();
-        for (RagDocumentRepository.ReadyChunk chunk : allChunks) {
+        for (RagDocumentRepository.ReadyChunk chunk : candidates) {
             String title = chunk.documentTitle() == null ? "" : chunk.documentTitle();
             String heading = chunk.heading() == null ? "" : chunk.heading();
             String content = chunk.content() == null ? "" : chunk.content();
@@ -236,7 +278,6 @@ public class RagChunkRetriever {
                     score += 42;
                 } else if (lowerContent.contains(normalized)) {
                     score += 30;
-                    // Extra signal when exact phrase appears in the opening profile/intro chunk
                     if (chunk.chunkIndex() <= 1) {
                         score += 12;
                     }
@@ -305,6 +346,12 @@ public class RagChunkRetriever {
         return combined.contains("更新日志") || combined.contains("changelog") || combined.contains("release-notes");
     }
 
+    private static RagChunk.RagSearchHit preferredHit(RagChunk.RagSearchHit first, RagChunk.RagSearchHit second) {
+        int firstLen = first.content() == null ? 0 : first.content().length();
+        int secondLen = second.content() == null ? 0 : second.content().length();
+        return secondLen > firstLen ? second : first;
+    }
+
     private static RagChunk.RagSearchHit withScore(RagChunk.RagSearchHit hit, double score) {
         return new RagChunk.RagSearchHit(
             hit.documentId(),
@@ -327,6 +374,6 @@ public class RagChunkRetriever {
     private record ChunkKey(UUID documentId, int chunkIndex) {
     }
 
-    private record FusedCandidate(RagChunk.RagSearchHit hit, double vectorScore, double lexicalScore) {
+    private record RrfCandidate(RagChunk.RagSearchHit hit, int vectorRank, int lexicalRank) {
     }
 }

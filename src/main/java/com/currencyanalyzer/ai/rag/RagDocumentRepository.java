@@ -13,7 +13,10 @@ import java.sql.SQLException;
 import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
+import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
@@ -24,10 +27,13 @@ import java.util.UUID;
 public class RagDocumentRepository {
 
     private static final Logger log = LoggerFactory.getLogger(RagDocumentRepository.class);
+    private static final int MAX_SQL_LEXICAL_TERMS = 6;
 
     private final JdbcTemplate jdbcTemplate;
     private final Object pgVectorDetectionLock = new Object();
+    private final Object pgTrgmDetectionLock = new Object();
     private volatile Boolean pgVectorAvailable;
+    private volatile Boolean pgTrgmAvailable;
 
     public RagDocumentRepository(JdbcTemplate jdbcTemplate) {
         this.jdbcTemplate = jdbcTemplate;
@@ -48,6 +54,26 @@ public class RagDocumentRepository {
                 return detected;
             } catch (SQLException | RuntimeException exception) {
                 log.debug("pgvector detection failed transiently ({})", exception.getMessage());
+                return false;
+            }
+        }
+    }
+
+    public boolean isPgTrgmAvailable() {
+        Boolean cached = pgTrgmAvailable;
+        if (cached != null) {
+            return cached;
+        }
+        synchronized (pgTrgmDetectionLock) {
+            if (pgTrgmAvailable != null) {
+                return pgTrgmAvailable;
+            }
+            try {
+                boolean detected = detectPgTrgm();
+                pgTrgmAvailable = detected;
+                return detected;
+            } catch (SQLException | RuntimeException exception) {
+                log.debug("pg_trgm detection failed transiently ({})", exception.getMessage());
                 return false;
             }
         }
@@ -347,28 +373,118 @@ public class RagDocumentRepository {
                 WHERE d.status = 'READY'
                 ORDER BY d.created_at DESC, c.chunk_index ASC
                 """,
-            (rs, rowNum) -> new ReadyChunk(
-                rs.getObject("document_id", UUID.class),
-                rs.getString("document_title"),
-                rs.getString("filename"),
-                rs.getString("source"),
-                rs.getInt("chunk_index"),
-                rs.getString("heading"),
-                rs.getString("content")
-            )
+            (rs, rowNum) -> mapReadyChunk(rs)
         );
     }
 
-    private boolean detectPgVector() throws SQLException {
-        DataSource dataSource = jdbcTemplate.getDataSource();
-        if (dataSource == null) {
-            return false;
+    public List<ReadyChunk> findReadyChunksByDocumentIds(Collection<UUID> documentIds) {
+        if (documentIds == null || documentIds.isEmpty()) {
+            return List.of();
         }
-        try (Connection connection = dataSource.getConnection()) {
-            String product = connection.getMetaData().getDatabaseProductName();
-            if (product == null || !product.toLowerCase(Locale.ROOT).contains("postgres")) {
-                return false;
+        List<UUID> distinctIds = documentIds.stream().filter(Objects::nonNull).distinct().toList();
+        if (distinctIds.isEmpty()) {
+            return List.of();
+        }
+        String placeholders = String.join(", ", Collections.nCopies(distinctIds.size(), "?"));
+        String sql = """
+                SELECT d.id AS document_id,
+                       d.title AS document_title,
+                       d.filename AS filename,
+                       d.source AS source,
+                       c.chunk_index AS chunk_index,
+                       c.heading AS heading,
+                       c.content AS content
+                FROM rag_chunks c
+                JOIN rag_documents d ON d.id = c.document_id
+                WHERE d.status = 'READY'
+                  AND d.id IN (%s)
+                ORDER BY d.created_at DESC, c.chunk_index ASC
+                """.formatted(placeholders);
+        return jdbcTemplate.query(sql, (rs, rowNum) -> mapReadyChunk(rs), distinctIds.toArray());
+    }
+
+    public List<ReadyChunk> searchLexicalCandidates(String normalizedQuery, List<String> terms, int limit) {
+        if (normalizedQuery == null || normalizedQuery.isBlank() || limit < 1) {
+            return List.of();
+        }
+        if (!isPgTrgmAvailable()) {
+            return findAllReadyChunks();
+        }
+        List<String> boundedTerms = new ArrayList<>();
+        if (terms != null) {
+            for (String term : terms) {
+                if (term != null && !term.isBlank() && boundedTerms.size() < MAX_SQL_LEXICAL_TERMS) {
+                    boundedTerms.add(term.trim());
+                }
             }
+        }
+        StringBuilder sql = new StringBuilder("""
+                SELECT d.id AS document_id,
+                       d.title AS document_title,
+                       d.filename AS filename,
+                       d.source AS source,
+                       c.chunk_index AS chunk_index,
+                       c.heading AS heading,
+                       c.content AS content
+                FROM rag_chunks c
+                JOIN rag_documents d ON d.id = c.document_id
+                WHERE d.status = 'READY'
+                  AND (
+                      word_similarity(?, c.content) > 0.15
+                      OR word_similarity(?, COALESCE(c.heading, '')) > 0.20
+                      OR word_similarity(?, d.title) > 0.20
+                      OR c.content ILIKE ? ESCAPE '\\'
+                      OR COALESCE(c.heading, '') ILIKE ? ESCAPE '\\'
+                      OR d.title ILIKE ? ESCAPE '\\'
+                """);
+        List<Object> params = new ArrayList<>();
+        String queryPattern = toLikePattern(normalizedQuery);
+        params.add(normalizedQuery);
+        params.add(normalizedQuery);
+        params.add(normalizedQuery);
+        params.add(queryPattern);
+        params.add(queryPattern);
+        params.add(queryPattern);
+
+        for (String term : boundedTerms) {
+            sql.append("""
+                      OR c.content ILIKE ? ESCAPE '\\'
+                      OR COALESCE(c.heading, '') ILIKE ? ESCAPE '\\'
+                      OR d.title ILIKE ? ESCAPE '\\'
+                    """);
+            String pattern = toLikePattern(term);
+            params.add(pattern);
+            params.add(pattern);
+            params.add(pattern);
+        }
+
+        sql.append("""
+                  )
+                ORDER BY GREATEST(
+                    word_similarity(?, d.title),
+                    word_similarity(?, COALESCE(c.heading, '')),
+                    word_similarity(?, c.content)
+                ) DESC,
+                d.created_at DESC,
+                c.chunk_index ASC
+                LIMIT ?
+                """);
+        params.add(normalizedQuery);
+        params.add(normalizedQuery);
+        params.add(normalizedQuery);
+        params.add(limit);
+
+        try {
+            return jdbcTemplate.query(sql.toString(), (rs, rowNum) -> mapReadyChunk(rs), params.toArray());
+        } catch (RuntimeException exception) {
+            log.warn("PostgreSQL pg_trgm lexical query failed; falling back to full scan ({})", exception.getMessage());
+            return findAllReadyChunks();
+        }
+    }
+
+    private boolean detectPgVector() throws SQLException {
+        if (!isPostgresDatabase()) {
+            return false;
         }
         Integer count = jdbcTemplate.queryForObject("""
                 SELECT COUNT(*)
@@ -380,6 +496,53 @@ public class RagDocumentRepository {
         boolean available = count != null && count > 0;
         log.info("PostgreSQL pgvector support for rag_chunks: {}", available ? "enabled" : "not found");
         return available;
+    }
+
+    private boolean detectPgTrgm() throws SQLException {
+        if (!isPostgresDatabase()) {
+            return false;
+        }
+        Integer count = jdbcTemplate.queryForObject("""
+                SELECT COUNT(*)
+                FROM pg_extension
+                WHERE extname = 'pg_trgm'
+                """,
+            Integer.class
+        );
+        boolean available = count != null && count > 0;
+        log.info("PostgreSQL pg_trgm support for rag_chunks: {}", available ? "enabled" : "not found");
+        return available;
+    }
+
+    private boolean isPostgresDatabase() throws SQLException {
+        DataSource dataSource = jdbcTemplate.getDataSource();
+        if (dataSource == null) {
+            return false;
+        }
+        try (Connection connection = dataSource.getConnection()) {
+            String product = connection.getMetaData().getDatabaseProductName();
+            return product != null && product.toLowerCase(Locale.ROOT).contains("postgres");
+        }
+    }
+
+    static String toLikePattern(String term) {
+        String escaped = term
+            .replace("\\", "\\\\")
+            .replace("%", "\\%")
+            .replace("_", "\\_");
+        return "%" + escaped + "%";
+    }
+
+    private static ReadyChunk mapReadyChunk(ResultSet rs) throws SQLException {
+        return new ReadyChunk(
+            rs.getObject("document_id", UUID.class),
+            rs.getString("document_title"),
+            rs.getString("filename"),
+            rs.getString("source"),
+            rs.getInt("chunk_index"),
+            rs.getString("heading"),
+            rs.getString("content")
+        );
     }
 
     static String toVectorLiteral(float[] vector) {
