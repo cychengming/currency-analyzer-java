@@ -1,18 +1,18 @@
 package com.currencyanalyzer.ai.springai;
 
-import com.currencyanalyzer.ai.knowledge.KnowledgeLibrary;
-import com.currencyanalyzer.ai.knowledge.SemanticKnowledgeIndex;
+import com.currencyanalyzer.ai.rag.RagEmbeddingConfiguration;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.ai.embedding.EmbeddingModel;
 
 import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class AssistantSpringAiConfigurationTests {
 
     @Test
-    void buildsTheChatClientAndSkipsABlankMeaningSearch() {
+    void buildsTheChatClientAndLazyEmbeddingModel() {
         AssistantSpringAiConfiguration configuration = new AssistantSpringAiConfiguration();
+        RagEmbeddingConfiguration embeddingConfiguration = new RagEmbeddingConfiguration();
 
         ChatModel plain = configuration.assistantChatModel(
             "https://api.deepseek.com",
@@ -28,9 +28,7 @@ class AssistantSpringAiConfigurationTests {
             200,
             15
         );
-        SemanticKnowledgeIndex index = configuration.semanticKnowledgeIndex(
-            new KnowledgeLibrary(),
-            0.45,
+        EmbeddingModel embeddingModel = embeddingConfiguration.ragEmbeddingModel(
             "https://example.invalid/model.onnx",
             "https://example.invalid/tokenizer.json",
             System.getProperty("java.io.tmpdir")
@@ -38,8 +36,6 @@ class AssistantSpringAiConfigurationTests {
 
         assertNotNull(plain);
         assertNotNull(slashed);
-        assertTrue(index.retrieve(null, 1).isEmpty());
-        assertTrue(index.retrieve(" ", 1).isEmpty());
-        assertTrue(index.retrieve("position sizing", 0).isEmpty());
+        assertNotNull(embeddingModel);
     }
 }

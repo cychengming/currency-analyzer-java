@@ -1,12 +1,12 @@
 services:
   postgres:
-    image: postgres:16-alpine
+    image: pgvector/pgvector:pg16
     environment:
       POSTGRES_USER: currency
       POSTGRES_PASSWORD: currency
       POSTGRES_DB: currency_analyzer
     ports:
-      - "5433:5432"
+      - "${POSTGRES_PORT:-5434}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -27,6 +27,17 @@ services:
       DATABASE_URL: jdbc:postgresql://postgres:5432/currency_analyzer
       DATABASE_USERNAME: currency
       DATABASE_PASSWORD: currency
+      STORAGE_PROVIDER: ${STORAGE_PROVIDER:-gcs}
+      GCP_PROJECT_ID: ${GCP_PROJECT_ID:-project-3806d7a4-0bd7-416f-8c4}
+      GCP_STORAGE_BUCKET: ${GCP_STORAGE_BUCKET:-currency-analyze}
+      GCP_STORAGE_PREFIX: ${GCP_STORAGE_PREFIX:-knowledge}
+      GOOGLE_APPLICATION_CREDENTIALS: ${GOOGLE_APPLICATION_CREDENTIALS:-}
+      RAG_ADMIN_USERS: ${RAG_ADMIN_USERS:-}
+      RAG_SYNC_ON_STARTUP: ${RAG_SYNC_ON_STARTUP:-true}
+    # To mount a GCP service-account or ADC JSON file into the container:
+    # volumes:
+    #   - C:/Users/cyche/.gcp/currency-analyzer-storage.json:/run/secrets/gcp-key.json:ro
+    # and set GOOGLE_APPLICATION_CREDENTIALS=/run/secrets/gcp-key.json
     depends_on:
       postgres:
         condition: service_healthy

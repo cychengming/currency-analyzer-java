@@ -18,3 +18,11 @@ app:
       api-key: ""
     knowledge:
       retrieval: keyword
+  storage:
+    provider: local
+    local-directory: ${java.io.tmpdir}/currency-analyzer-test-storage
+  rag:
+    enabled: true
+    seed-builtin-guides: false
+    sync-on-startup: false
+    admin-users: admin

@@ -33,6 +33,8 @@ class DeepSeekAiProviderTests {
 
                 data: {"choices":[{"delta":{"content":"there."}}]}
 
+                data: {"choices":[],"usage":{"prompt_tokens":11,"completion_tokens":4}}
+
                 data: [DONE]
 
                 """.getBytes(StandardCharsets.UTF_8);
@@ -54,19 +56,23 @@ class DeepSeekAiProviderTests {
             List<String> deltas = new ArrayList<>();
             List<String> reasoning = new ArrayList<>();
 
-            provider.stream(
+            AiProvider.ModelUsage usage = provider.consume(
                 List.of(new AiProvider.Message("user", "Say hello")),
                 deltas::add,
                 reasoning::add,
-                () -> false
+                () -> false,
+                true
             );
 
             assertEquals("Bearer test-secret", authorization.get());
             assertTrue(requestBody.get().contains("\"model\":\"deepseek-flash\""));
             assertTrue(requestBody.get().contains("\"stream\":true"));
+            assertTrue(requestBody.get().contains("include_usage"));
             assertTrue(requestBody.get().contains("\"thinking\":{\"type\":\"enabled\"}"));
             assertEquals(List.of("First ", "think."), reasoning);
             assertEquals(List.of("Hello ", "there."), deltas);
+            assertEquals(11, usage.inputTokens());
+            assertEquals(4, usage.outputTokens());
         } finally {
             server.stop(0);
         }
@@ -99,7 +105,7 @@ class DeepSeekAiProviderTests {
             byte[] response = """
                 {"choices":[{"message":{"role":"assistant","content":null,"tool_calls":[
                   {"id":"call-1","type":"function","function":{"name":"get_live_rates","arguments":"{}"}}
-                ]}}]}
+                ]}}],"usage":{"prompt_tokens":20,"completion_tokens":6}}
                 """.getBytes(StandardCharsets.UTF_8);
             exchange.getResponseHeaders().set("Content-Type", "application/json");
             exchange.sendResponseHeaders(200, response.length);
@@ -130,6 +136,8 @@ class DeepSeekAiProviderTests {
             assertEquals("call-1", completion.toolCalls().getFirst().id());
             assertEquals("get_live_rates", completion.toolCalls().getFirst().name());
             assertEquals("{}", completion.toolCalls().getFirst().argumentsJson());
+            assertEquals(20, completion.usage().inputTokens());
+            assertEquals(6, completion.usage().outputTokens());
         } finally {
             server.stop(0);
         }

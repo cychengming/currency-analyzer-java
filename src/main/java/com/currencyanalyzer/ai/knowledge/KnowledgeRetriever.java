@@ -1,5 +1,6 @@
 package com.currencyanalyzer.ai.knowledge;
 
+import com.currencyanalyzer.ai.rag.RagChunkRetriever;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
@@ -25,30 +26,30 @@ public class KnowledgeRetriever {
     );
 
     private final KnowledgeLibrary library;
-    private final SemanticKnowledgeIndex semantic;
+    private final RagChunkRetriever ragChunkRetriever;
 
     public KnowledgeRetriever(KnowledgeLibrary library) {
-        this(library, (SemanticKnowledgeIndex) null);
+        this(library, (RagChunkRetriever) null);
     }
 
     @Autowired
-    public KnowledgeRetriever(KnowledgeLibrary library, ObjectProvider<SemanticKnowledgeIndex> semantic) {
-        this(library, semantic.getIfAvailable());
+    public KnowledgeRetriever(KnowledgeLibrary library, ObjectProvider<RagChunkRetriever> ragChunkRetriever) {
+        this(library, ragChunkRetriever.getIfAvailable());
     }
 
-    KnowledgeRetriever(KnowledgeLibrary library, SemanticKnowledgeIndex semantic) {
+    public KnowledgeRetriever(KnowledgeLibrary library, RagChunkRetriever ragChunkRetriever) {
         this.library = library;
-        this.semantic = semantic;
+        this.ragChunkRetriever = ragChunkRetriever;
     }
 
     public List<KnowledgeNote> retrieve(String query, int maxNotes) {
         if (query == null || query.isBlank() || maxNotes < 1) {
             return List.of();
         }
-        if (semantic != null) {
-            List<KnowledgeNote> notes = semantic.retrieve(query, maxNotes);
-            if (!notes.isEmpty()) {
-                return notes;
+        if (ragChunkRetriever != null) {
+            List<KnowledgeNote> ragNotes = ragChunkRetriever.retrieveAsNotes(query, maxNotes);
+            if (!ragNotes.isEmpty()) {
+                return ragNotes;
             }
         }
         String normalized = query.toLowerCase(Locale.ROOT);
@@ -56,7 +57,7 @@ public class KnowledgeRetriever {
         List<String> tokens = latinTokens(normalized);
         List<ScoredNote> scored = new ArrayList<>();
         for (KnowledgeNote note : library.notes()) {
-            int score = score(note, normalized, phrases, tokens);
+            int score = scoreText(note.title(), note.body(), normalized, phrases, tokens);
             if (score >= MINIMUM_SCORE) {
                 scored.add(new ScoredNote(note, score));
             }
@@ -69,9 +70,19 @@ public class KnowledgeRetriever {
         return scored.stream().map(ScoredNote::note).toList();
     }
 
-    private static int score(KnowledgeNote note, String query, List<String> phrases, List<String> tokens) {
-        String title = note.title().toLowerCase(Locale.ROOT);
-        String body = note.body().toLowerCase(Locale.ROOT);
+    public static int minimumScore() {
+        return MINIMUM_SCORE;
+    }
+
+    public static int scoreText(
+        String rawTitle,
+        String rawBody,
+        String query,
+        List<String> phrases,
+        List<String> tokens
+    ) {
+        String title = rawTitle == null ? "" : rawTitle.toLowerCase(Locale.ROOT);
+        String body = rawBody == null ? "" : rawBody.toLowerCase(Locale.ROOT);
         int score = 0;
         if (!title.isBlank() && query.contains(title)) {
             score += 30;
@@ -94,7 +105,7 @@ public class KnowledgeRetriever {
         return score + Math.min(bodyScore, 12);
     }
 
-    static List<String> cjkPhrases(String text) {
+    public static List<String> cjkPhrases(String text) {
         Set<String> phrases = new LinkedHashSet<>();
         StringBuilder run = new StringBuilder();
         for (int i = 0; i <= text.length(); i++) {
@@ -120,7 +131,7 @@ public class KnowledgeRetriever {
         return List.copyOf(phrases);
     }
 
-    private static List<String> latinTokens(String text) {
+    public static List<String> latinTokens(String text) {
         Set<String> tokens = new LinkedHashSet<>();
         Matcher matcher = LATIN_TOKEN.matcher(text);
         while (matcher.find()) {

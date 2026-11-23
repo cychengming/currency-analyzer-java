@@ -868,6 +868,92 @@ function loadPages() {
                 <div id="dlJobStatus" class="loading" style="display:none; margin-top: 12px;"></div>
             </div>
         </div>
+
+        <!-- Knowledge & RAG Documents Page -->
+        <div id="knowledge" class="page page-shell">
+            <div class="card">
+                <div class="page-intro">
+                    <div class="page-intro-copy">
+                        <div class="page-eyebrow">Knowledge Base &amp; RAG</div>
+                        <div class="page-heading">Manage documents for Ask Currency Analyzer</div>
+                        <div class="page-subtext">Upload Markdown (.md), plain text (.txt), or CSV (.csv) files to Google Cloud Storage or sync existing bucket objects into PostgreSQL pgvector.</div>
+                    </div>
+                    <div class="summary-card">
+                        <div class="summary-card-title">Storage &amp; Index Target</div>
+                        <div class="summary-row">
+                            <span>Provider</span>
+                            <strong id="ragStorageProvider">—</strong>
+                        </div>
+                        <div class="summary-row">
+                            <span>Bucket</span>
+                            <strong id="ragStorageBucket">—</strong>
+                        </div>
+                        <div class="summary-row">
+                            <span>Vector Engine</span>
+                            <strong id="ragVectorStatus">—</strong>
+                        </div>
+                    </div>
+                </div>
+
+                <div id="knowledgeNotice" class="inline-banner" style="display:none; margin-bottom: 14px;"></div>
+
+                <div class="rag-actions-grid">
+                    <div class="rag-subpanel">
+                        <div class="rag-subpanel-title">Upload Document</div>
+                        <div class="rag-file-picker">
+                            <input type="file" id="ragUploadFile" accept=".md,.markdown,.txt,.csv,text/markdown,text/plain,text/csv" style="display:none;" onchange="handleRagFileSelection()">
+                            <button type="button" class="btn-secondary" style="width:auto;" onclick="document.getElementById('ragUploadFile').click()">Choose File</button>
+                            <span id="ragUploadFileName" class="rag-file-picker-name">No file chosen</span>
+                        </div>
+                        <input type="text" id="ragUploadTitle" maxlength="200" placeholder="Optional document title (auto-detected if blank)">
+                        <div class="panel-actions" style="justify-content: space-between;">
+                            <span class="field-hint" id="ragMaxSizeHint" style="margin:0;">Max 5 MB (.md, .txt, .csv)</span>
+                            <button type="button" class="btn-primary" style="width:auto;" id="ragUploadBtn" onclick="uploadRagDocument()">Upload &amp; Index</button>
+                        </div>
+                    </div>
+
+                    <div class="rag-subpanel">
+                        <div class="rag-subpanel-title">Sync Bucket &amp; Refresh</div>
+                        <div class="form-group" style="margin:0;">
+                            <label for="ragSyncPrefix">Bucket Prefix</label>
+                            <input type="text" id="ragSyncPrefix" placeholder="e.g. knowledge or knowledge/concepts">
+                            <div class="field-hint">Imports new or updated .md, .txt, and .csv files from GCS.</div>
+                        </div>
+                        <div class="panel-actions" style="margin-top: auto;">
+                            <button type="button" class="btn-primary" style="width:auto;" id="ragSyncBtn" onclick="syncRagFromStorage()">Sync from GCS</button>
+                            <button type="button" class="btn-secondary" style="width:auto;" id="ragRefreshBtn" onclick="loadRagDocuments({ manual: true })">Refresh List</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card" style="margin-top: 16px;">
+                <div class="panel-toolbar" style="margin-bottom: 12px;">
+                    <h2 class="card-title" style="margin:0;">Indexed Documents</h2>
+                    <span id="ragDocumentCount" class="status-pill status-pill-muted">0 documents</span>
+                </div>
+                <div class="rag-toolbar">
+                    <input type="text" id="ragFilterQuery" placeholder="Filter by title, filename, or path..." oninput="handleRagFilterChange()">
+                    <select id="ragFilterFolder" onchange="handleRagFilterChange()" aria-label="Filter by folder">
+                        <option value="all">All folders</option>
+                    </select>
+                </div>
+                <div id="ragDocumentsList">
+                    <div class="loading">Loading documents...</div>
+                </div>
+                <div id="ragPagination" class="rag-pagination" style="display:none;"></div>
+            </div>
+
+            <div class="card" style="margin-top: 16px;">
+                <h2 class="card-title">Test RAG Retrieval</h2>
+                <p class="muted-copy" style="margin-bottom: 12px;">Preview the top chunks matched in PostgreSQL pgvector before asking the AI assistant.</p>
+                <div class="panel-actions" style="align-items: center;">
+                    <input type="text" id="ragSearchQuery" placeholder="Ask a question or enter keywords..." style="flex: 1; margin: 0;" onkeydown="if (event.key === 'Enter') { event.preventDefault(); searchRagChunks(); }">
+                    <button type="button" class="btn-primary" style="width:auto;" id="ragSearchBtn" onclick="searchRagChunks()">Search Chunks</button>
+                </div>
+                <div id="ragSearchResults" style="margin-top: 12px;"></div>
+            </div>
+        </div>
     `;
 }
 
@@ -919,6 +1005,9 @@ async function refreshDashboardNow() {
 
 window.handleDashboardPageChange = function handleDashboardPageChange(page) {
     writeDashboardState({ activePage: page });
+    if (page === 'knowledge' && typeof initKnowledgePage === 'function') {
+        initKnowledgePage();
+    }
 };
 
 function populateAssetSelectors() {

@@ -7,6 +7,9 @@ import com.currencyanalyzer.ai.provider.AiProvider.Message;
 import com.currencyanalyzer.ai.provider.AiProvider.ToolCall;
 import com.currencyanalyzer.ai.provider.AiProvider.ToolDefinition;
 import com.currencyanalyzer.ai.provider.AiProvider.Turn;
+import com.currencyanalyzer.ai.rag.RagDocument;
+import com.currencyanalyzer.ai.rag.RagDocumentRepository;
+import com.currencyanalyzer.ai.rag.RagIngestionService;
 import com.currencyanalyzer.ai.tools.AssistantTools;
 import com.currencyanalyzer.marketdata.LiveRate;
 import com.currencyanalyzer.marketdata.MarketDataService;
@@ -33,6 +36,8 @@ import java.util.concurrent.atomic.AtomicReference;
 import static org.mockito.Mockito.when;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
@@ -60,7 +65,19 @@ class AiConversationControllerTests {
     private JdbcTemplate jdbcTemplate;
 
     @Autowired
+    private RagDocumentRepository ragDocumentRepository;
+
+    @Autowired
+    private RagIngestionService ragIngestionService;
+
+    @Autowired
     private AssistantTools assistantTools;
+
+    @Autowired
+    private AiUsageRepository usageRepository;
+
+    @Autowired
+    private java.time.Clock clock;
 
     @MockitoBean
     private MarketDataService marketDataService;
@@ -170,36 +187,120 @@ class AiConversationControllerTests {
             .andExpect(jsonPath("$[0].role").value("user"))
             .andExpect(jsonPath("$[1].role").value("assistant"))
             .andExpect(jsonPath("$[1].content").value("Reply from test provider."));
+
+        Integer requests = jdbcTemplate.queryForObject(
+            "SELECT COALESCE(SUM(request_count), 0) FROM ai_usage WHERE username = 'stream-user'",
+            Integer.class
+        );
+        assertTrue(requests != null && requests >= 1);
     }
 
     @Test
     void attachesMatchingKnowledgeNotesToTheProviderPrompt() throws Exception {
-        MvcResult created = mockMvc.perform(post("/api/ai/conversations")
-                .with(user("knowledge-user"))
-                .with(csrf()))
-            .andExpect(status().isCreated())
-            .andReturn();
-        String id = JsonMapper.builder().build()
-            .readTree(created.getResponse().getContentAsString())
-            .get("id").asText();
+        java.util.UUID docId = java.util.UUID.randomUUID();
+        byte[] content = "# 凯利公式\n\n凯利公式用于衡量单笔仓位押注占总资金的理论最优比例。\n"
+            .getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        java.time.Instant now = java.time.Instant.now();
+        ragDocumentRepository.insert(new RagDocument(
+            docId,
+            RagDocument.SOURCE_UPLOAD,
+            "kelly.md",
+            "凯利公式",
+            "text/markdown; charset=utf-8",
+            content.length,
+            "test-sha-kelly",
+            "local",
+            "test",
+            "knowledge/uploads/" + docId + "/kelly.md",
+            "1",
+            RagDocument.STATUS_PENDING,
+            0,
+            null,
+            "knowledge-user",
+            now,
+            now
+        ));
+        ragIngestionService.ingestNow(docId, "test-sha-kelly", "kelly.md", null, content);
+        try {
+            MvcResult created = mockMvc.perform(post("/api/ai/conversations")
+                    .with(user("knowledge-user"))
+                    .with(csrf()))
+                .andExpect(status().isCreated())
+                .andReturn();
+            String id = JsonMapper.builder().build()
+                .readTree(created.getResponse().getContentAsString())
+                .get("id").asText();
 
-        MvcResult pendingResponse = mockMvc.perform(post("/api/ai/conversations/{id}/messages", id)
-                .with(user("knowledge-user"))
-                .with(csrf())
-                .contentType("application/json")
-                .accept("text/event-stream")
-                .content("{\"message\":\"请用凯利公式解释仓位\"}"))
-            .andExpect(request().asyncStarted())
-            .andReturn();
+            MvcResult pendingResponse = mockMvc.perform(post("/api/ai/conversations/{id}/messages", id)
+                    .with(user("knowledge-user"))
+                    .with(csrf())
+                    .contentType("application/json")
+                    .accept("text/event-stream")
+                    .content("{\"message\":\"请用凯利公式解释仓位\"}"))
+                .andExpect(request().asyncStarted())
+                .andReturn();
 
-        mockMvc.perform(asyncDispatch(pendingResponse))
-            .andExpect(status().isOk());
+            mockMvc.perform(asyncDispatch(pendingResponse))
+                .andExpect(status().isOk());
 
-        List<AiProvider.Message> prompt = FakeProviderConfiguration.lastPrompt.get();
-        assertEquals("system", prompt.getFirst().role());
-        assertTrue(prompt.getFirst().content().contains("## 凯利公式"));
-        assertEquals("user", prompt.get(1).role());
-        assertEquals("请用凯利公式解释仓位", prompt.get(1).content());
+            List<AiProvider.Message> prompt = FakeProviderConfiguration.lastPrompt.get();
+            assertEquals("system", prompt.getFirst().role());
+            assertFalse(prompt.getFirst().content().contains("## 凯利公式"));
+            assertFalse(prompt.getFirst().content().contains(prompt.get(1).content()));
+            assertEquals("user", prompt.get(1).role());
+            assertTrue(prompt.get(1).content().contains("UNTRUSTED REFERENCE CONTEXT"));
+            assertTrue(prompt.get(1).content().contains("## 凯利公式"));
+            assertTrue(prompt.get(1).content().contains("END UNTRUSTED REFERENCE CONTEXT"));
+            assertEquals("user", prompt.get(2).role());
+            assertEquals("请用凯利公式解释仓位", prompt.get(2).content());
+
+            MvcResult followUp = mockMvc.perform(post("/api/ai/conversations/{id}/messages", id)
+                    .with(user("knowledge-user"))
+                    .with(csrf())
+                    .contentType("application/json")
+                    .accept("text/event-stream")
+                    .content("{\"message\":\"what about his risk view?\"}"))
+                .andExpect(request().asyncStarted())
+                .andReturn();
+            mockMvc.perform(asyncDispatch(followUp))
+                .andExpect(status().isOk());
+
+            List<AiProvider.Message> followUpPrompt = FakeProviderConfiguration.lastPrompt.get();
+            assertFalse(followUpPrompt.getFirst().content().contains("凯利公式"));
+            assertTrue(followUpPrompt.stream().anyMatch(message ->
+                "user".equals(message.role())
+                    && message.content().contains("UNTRUSTED REFERENCE CONTEXT")
+                    && message.content().contains("凯利公式")
+                    && message.content().contains("END UNTRUSTED REFERENCE CONTEXT")
+            ));
+            assertEquals("what about his risk view?", followUpPrompt.getLast().content());
+        } finally {
+            ragDocumentRepository.deleteById(docId);
+        }
+    }
+
+    @Test
+    void enforcesConfigurableDailyRequestAndTokenLimits() {
+        usageRepository.record("quota-requests", null, "deepseek-flash", 1, 1, 1, clock.instant());
+        AiUsageService requestLimited = new AiUsageService(usageRepository, clock, 1, 0);
+        AiUsageLimitException requests = assertThrows(
+            AiUsageLimitException.class,
+            () -> requestLimited.ensureWithinDailyLimit("quota-requests")
+        );
+        assertEquals("Daily AI request limit reached", requests.getMessage());
+        new AiUsageService(usageRepository, clock, 2, 0).ensureWithinDailyLimit("quota-requests");
+
+        usageRepository.record("quota-tokens", null, "deepseek-flash", 4, 3, 1, clock.instant());
+        AiUsageLimitException tokens = assertThrows(
+            AiUsageLimitException.class,
+            () -> new AiUsageService(usageRepository, clock, 0, 5).ensureWithinDailyLimit("quota-tokens")
+        );
+        assertEquals("Daily AI token limit reached", tokens.getMessage());
+        new AiUsageService(usageRepository, clock, 0, 0).ensureWithinDailyLimit("quota-tokens");
+
+        var response = new com.currencyanalyzer.web.ApiExceptionHandler().usageLimit(requests);
+        assertEquals(429, response.getStatusCode().value());
+        assertEquals("Daily AI request limit reached", response.getBody().get("error"));
     }
 
     @Test

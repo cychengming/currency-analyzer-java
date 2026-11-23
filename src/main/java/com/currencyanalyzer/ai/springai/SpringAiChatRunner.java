@@ -1,6 +1,7 @@
 package com.currencyanalyzer.ai.springai;
 
 import com.currencyanalyzer.ai.provider.AiProviderException;
+import org.springframework.ai.chat.metadata.Usage;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.SystemMessage;
@@ -151,6 +152,7 @@ public class SpringAiChatRunner {
         StringBuilder reasoning = new StringBuilder();
         ToolCallBuffer toolCalls = new ToolCallBuffer();
         AtomicReference<String> finishReason = new AtomicReference<>();
+        int[] usage = new int[2];
         try {
             chatModel.stream(prompt)
                 .takeWhile(chunk -> !cancelled.getAsBoolean())
@@ -160,17 +162,25 @@ public class SpringAiChatRunner {
                     if (reason != null) {
                         finishReason.set(reason);
                     }
+                    int[] chunkUsage = readUsage(chunk);
+                    if (chunkUsage != null) {
+                        usage[0] = chunkUsage[0];
+                        usage[1] = chunkUsage[1];
+                    }
                 })
                 .blockLast();
         } catch (RuntimeException exception) {
             if (cancelled.getAsBoolean()) {
+                listener.onUsage(usage[0], usage[1]);
                 return new Round(false, reasoning.toString(), text.toString(), finishReason.get());
             }
+            listener.onUsage(usage[0], usage[1]);
             if (exception instanceof AiProviderException providerException) {
                 throw providerException;
             }
             throw new AiProviderException("Unable to communicate with DeepSeek", exception);
         }
+        listener.onUsage(usage[0], usage[1]);
         if (cancelled.getAsBoolean() || !includeTools) {
             return new Round(false, reasoning.toString(), text.toString(), finishReason.get());
         }
@@ -206,6 +216,19 @@ public class SpringAiChatRunner {
             ToolActivity.clear();
         }
         return new Round(true, reasoning.toString(), text.toString(), finishReason.get());
+    }
+
+    private static int[] readUsage(ChatResponse chunk) {
+        if (chunk == null || chunk.getMetadata() == null || chunk.getMetadata().getUsage() == null) {
+            return null;
+        }
+        Usage usage = chunk.getMetadata().getUsage();
+        int input = usage.getPromptTokens();
+        int output = usage.getCompletionTokens();
+        if (input <= 0 && output <= 0) {
+            return null;
+        }
+        return new int[] {input, output};
     }
 
     private static String finishReason(ChatResponse chunk) {
@@ -306,6 +329,9 @@ public class SpringAiChatRunner {
         void onToolStarted(String name);
 
         void onToolFinished(String name, String argumentsJson, String result, int durationMs);
+
+        default void onUsage(int inputTokens, int outputTokens) {
+        }
     }
 
     private static final class TextCount {
@@ -332,6 +358,11 @@ public class SpringAiChatRunner {
                 @Override
                 public void onToolFinished(String name, String argumentsJson, String result, int durationMs) {
                     listener.onToolFinished(name, argumentsJson, result, durationMs);
+                }
+
+                @Override
+                public void onUsage(int inputTokens, int outputTokens) {
+                    listener.onUsage(inputTokens, outputTokens);
                 }
             };
         }

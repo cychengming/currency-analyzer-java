@@ -1,0 +1,634 @@
+package com.currencyanalyzer.ai.rag;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
+import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
+import org.springframework.stereotype.Repository;
+import org.springframework.transaction.annotation.Transactional;
+
+import javax.sql.DataSource;
+import java.sql.Connection;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.time.Instant;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
+import java.util.Arrays;
+import java.util.Collection;
+import java.util.List;
+import java.util.Locale;
+import java.util.Objects;
+import java.util.Optional;
+import java.util.UUID;
+
+@Repository
+public class RagDocumentRepository {
+
+    private static final Logger log = LoggerFactory.getLogger(RagDocumentRepository.class);
+    private static final int MAX_SQL_LEXICAL_TERMS = 6;
+    private static final String FIND_READY_BY_DOCUMENT_IDS_SQL = """
+            SELECT d.id AS document_id,
+                   d.title AS document_title,
+                   d.filename AS filename,
+                   d.source AS source,
+                   c.chunk_index AS chunk_index,
+                   c.heading AS heading,
+                   c.content AS content
+            FROM rag_chunks c
+            JOIN rag_documents d ON d.id = c.document_id
+            WHERE d.status = 'READY'
+              AND d.id IN (:documentIds)
+            ORDER BY d.created_at DESC, c.chunk_index ASC
+            """;
+    private static final String SEARCH_LEXICAL_PG_TRGM_SQL = """
+            SELECT d.id AS document_id,
+                   d.title AS document_title,
+                   d.filename AS filename,
+                   d.source AS source,
+                   c.chunk_index AS chunk_index,
+                   c.heading AS heading,
+                   c.content AS content
+            FROM rag_chunks c
+            JOIN rag_documents d ON d.id = c.document_id
+            WHERE d.status = 'READY'
+              AND (
+                  word_similarity(?, c.content) > 0.15
+                  OR word_similarity(?, COALESCE(c.heading, '')) > 0.20
+                  OR word_similarity(?, d.title) > 0.20
+                  OR c.content ILIKE ANY (ARRAY[?, ?, ?, ?, ?, ?, ?]::text[])
+                  OR COALESCE(c.heading, '') ILIKE ANY (ARRAY[?, ?, ?, ?, ?, ?, ?]::text[])
+                  OR d.title ILIKE ANY (ARRAY[?, ?, ?, ?, ?, ?, ?]::text[])
+              )
+            ORDER BY GREATEST(
+                word_similarity(?, d.title),
+                word_similarity(?, COALESCE(c.heading, '')),
+                word_similarity(?, c.content)
+            ) DESC,
+            d.created_at DESC,
+            c.chunk_index ASC
+            LIMIT ?
+            """;
+
+    private final JdbcTemplate jdbcTemplate;
+    private final NamedParameterJdbcTemplate namedParameterJdbcTemplate;
+    private final Object pgVectorDetectionLock = new Object();
+    private final Object pgTrgmDetectionLock = new Object();
+    private volatile Boolean pgVectorAvailable;
+    private volatile Boolean pgTrgmAvailable;
+
+    public RagDocumentRepository(JdbcTemplate jdbcTemplate) {
+        this.jdbcTemplate = jdbcTemplate;
+        this.namedParameterJdbcTemplate = new NamedParameterJdbcTemplate(jdbcTemplate);
+    }
+
+    public boolean isPgVectorAvailable() {
+        Boolean cached = pgVectorAvailable;
+        if (cached != null) {
+            return cached;
+        }
+        synchronized (pgVectorDetectionLock) {
+            if (pgVectorAvailable != null) {
+                return pgVectorAvailable;
+            }
+            try {
+                boolean detected = detectPgVector();
+                pgVectorAvailable = detected;
+                return detected;
+            } catch (SQLException | RuntimeException exception) {
+                log.debug("pgvector detection failed transiently ({})", exception.getMessage());
+                return false;
+            }
+        }
+    }
+
+    public boolean isPgTrgmAvailable() {
+        Boolean cached = pgTrgmAvailable;
+        if (cached != null) {
+            return cached;
+        }
+        synchronized (pgTrgmDetectionLock) {
+            if (pgTrgmAvailable != null) {
+                return pgTrgmAvailable;
+            }
+            try {
+                boolean detected = detectPgTrgm();
+                pgTrgmAvailable = detected;
+                return detected;
+            } catch (SQLException | RuntimeException exception) {
+                log.debug("pg_trgm detection failed transiently ({})", exception.getMessage());
+                return false;
+            }
+        }
+    }
+
+    public RagDocument insert(RagDocument document) {
+        OffsetDateTime created = OffsetDateTime.ofInstant(document.createdAt(), ZoneOffset.UTC);
+        OffsetDateTime updated = OffsetDateTime.ofInstant(document.updatedAt(), ZoneOffset.UTC);
+        jdbcTemplate.update("""
+                INSERT INTO rag_documents (
+                    id, source, filename, title, content_type, size_bytes, sha256,
+                    storage_provider, storage_bucket, storage_key, storage_generation,
+                    status, chunk_count, error_message, uploaded_by, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+            document.id(),
+            document.source(),
+            document.filename(),
+            document.title(),
+            document.contentType(),
+            document.sizeBytes(),
+            document.sha256(),
+            document.storageProvider(),
+            document.storageBucket(),
+            document.storageKey(),
+            document.storageGeneration(),
+            document.status(),
+            document.chunkCount(),
+            document.errorMessage(),
+            document.uploadedBy(),
+            created,
+            updated
+        );
+        return document;
+    }
+
+    public void updateForReindex(
+        UUID id,
+        String filename,
+        String title,
+        String contentType,
+        long sizeBytes,
+        String sha256,
+        String storageGeneration,
+        Instant now
+    ) {
+        jdbcTemplate.update("""
+                UPDATE rag_documents
+                SET filename = ?, title = ?, content_type = ?, size_bytes = ?, sha256 = ?,
+                    storage_generation = ?, status = ?, error_message = NULL, updated_at = ?
+                WHERE id = ?
+                """,
+            filename,
+            title,
+            contentType,
+            sizeBytes,
+            sha256,
+            storageGeneration,
+            RagDocument.STATUS_PENDING,
+            OffsetDateTime.ofInstant(now, ZoneOffset.UTC),
+            id
+        );
+    }
+
+    public boolean updateStatusIfMatches(
+        UUID id,
+        String expectedSha256,
+        String status,
+        int chunkCount,
+        String errorMessage,
+        Instant now
+    ) {
+        int updated = jdbcTemplate.update("""
+                UPDATE rag_documents
+                SET status = ?, chunk_count = ?, error_message = ?, updated_at = ?
+                WHERE id = ? AND sha256 = ?
+                """,
+            status,
+            chunkCount,
+            truncateError(errorMessage),
+            OffsetDateTime.ofInstant(now, ZoneOffset.UTC),
+            id,
+            expectedSha256
+        );
+        return updated > 0;
+    }
+
+    public List<RagDocument> findUploadsByPrefix(String storageProvider, String prefixWithTrailingSlash) {
+        String likePattern = prefixWithTrailingSlash == null || prefixWithTrailingSlash.isEmpty()
+            ? "%"
+            : escapeLike(prefixWithTrailingSlash) + "%";
+        return jdbcTemplate.query("""
+                SELECT id, source, filename, title, content_type, size_bytes, sha256,
+                       storage_provider, storage_bucket, storage_key, storage_generation,
+                       status, chunk_count, error_message, uploaded_by, created_at, updated_at
+                FROM rag_documents
+                WHERE source = 'upload'
+                  AND storage_provider = ?
+                  AND storage_key LIKE ? ESCAPE '\\'
+                ORDER BY storage_key ASC
+                """,
+            (rs, rowNum) -> mapDocument(rs),
+            storageProvider,
+            likePattern
+        );
+    }
+
+    public List<RagDocument> findStuckDocuments() {
+        return jdbcTemplate.query("""
+                SELECT id, source, filename, title, content_type, size_bytes, sha256,
+                       storage_provider, storage_bucket, storage_key, storage_generation,
+                       status, chunk_count, error_message, uploaded_by, created_at, updated_at
+                FROM rag_documents
+                WHERE status IN ('PENDING', 'INDEXING')
+                ORDER BY created_at ASC
+                """,
+            (rs, rowNum) -> mapDocument(rs)
+        );
+    }
+
+    private static String escapeLike(String value) {
+        return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_");
+    }
+
+    public List<RagDocument> findAll() {
+        return jdbcTemplate.query("""
+                SELECT id, source, filename, title, content_type, size_bytes, sha256,
+                       storage_provider, storage_bucket, storage_key, storage_generation,
+                       status, chunk_count, error_message, uploaded_by, created_at, updated_at
+                FROM rag_documents
+                ORDER BY source ASC, created_at DESC, id
+                """,
+            (rs, rowNum) -> mapDocument(rs)
+        );
+    }
+
+    public List<RagDocument> findBySource(String source) {
+        return jdbcTemplate.query("""
+                SELECT id, source, filename, title, content_type, size_bytes, sha256,
+                       storage_provider, storage_bucket, storage_key, storage_generation,
+                       status, chunk_count, error_message, uploaded_by, created_at, updated_at
+                FROM rag_documents
+                WHERE source = ?
+                ORDER BY created_at DESC, id
+                """,
+            (rs, rowNum) -> mapDocument(rs),
+            source
+        );
+    }
+
+    public Optional<RagDocument> findById(UUID id) {
+        List<RagDocument> rows = jdbcTemplate.query("""
+                SELECT id, source, filename, title, content_type, size_bytes, sha256,
+                       storage_provider, storage_bucket, storage_key, storage_generation,
+                       status, chunk_count, error_message, uploaded_by, created_at, updated_at
+                FROM rag_documents
+                WHERE id = ?
+                """,
+            (rs, rowNum) -> mapDocument(rs),
+            id
+        );
+        return rows.isEmpty() ? Optional.empty() : Optional.of(rows.getFirst());
+    }
+
+    public Optional<RagDocument> findByStorage(String storageProvider, String storageKey) {
+        List<RagDocument> rows = jdbcTemplate.query("""
+                SELECT id, source, filename, title, content_type, size_bytes, sha256,
+                       storage_provider, storage_bucket, storage_key, storage_generation,
+                       status, chunk_count, error_message, uploaded_by, created_at, updated_at
+                FROM rag_documents
+                WHERE storage_provider = ? AND storage_key = ?
+                """,
+            (rs, rowNum) -> mapDocument(rs),
+            storageProvider,
+            storageKey
+        );
+        return rows.isEmpty() ? Optional.empty() : Optional.of(rows.getFirst());
+    }
+
+    public boolean deleteById(UUID id) {
+        return jdbcTemplate.update("DELETE FROM rag_documents WHERE id = ?", id) > 0;
+    }
+
+    @Transactional
+    public boolean replaceChunks(
+        UUID documentId,
+        String expectedSha256,
+        String resolvedTitle,
+        List<ChunkRecord> chunks,
+        Instant now
+    ) {
+        OffsetDateTime timestamp = OffsetDateTime.ofInstant(now, ZoneOffset.UTC);
+        int updated = jdbcTemplate.update("""
+                UPDATE rag_documents
+                SET title = ?, status = ?, chunk_count = ?, error_message = NULL, updated_at = ?
+                WHERE id = ? AND sha256 = ?
+                """,
+            resolvedTitle,
+            RagDocument.STATUS_READY,
+            chunks.size(),
+            timestamp,
+            documentId,
+            expectedSha256
+        );
+        if (updated == 0) {
+            return false;
+        }
+        jdbcTemplate.update("DELETE FROM rag_chunks WHERE document_id = ?", documentId);
+        boolean vectorEnabled = isPgVectorAvailable();
+        for (ChunkRecord chunk : chunks) {
+            UUID chunkId = UUID.randomUUID();
+            String heading = chunk.heading() == null ? null : truncate(chunk.heading(), 255);
+            if (vectorEnabled && chunk.embedding() != null && chunk.embedding().length > 0) {
+                jdbcTemplate.update("""
+                        INSERT INTO rag_chunks (id, document_id, chunk_index, heading, content, char_count, embedding, created_at)
+                        VALUES (?, ?, ?, ?, ?, ?, CAST(? AS vector), ?)
+                        """,
+                    chunkId,
+                    documentId,
+                    chunk.chunkIndex(),
+                    heading,
+                    chunk.content(),
+                    chunk.content().length(),
+                    toVectorLiteral(chunk.embedding()),
+                    timestamp
+                );
+            } else {
+                jdbcTemplate.update("""
+                        INSERT INTO rag_chunks (id, document_id, chunk_index, heading, content, char_count, created_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                        """,
+                    chunkId,
+                    documentId,
+                    chunk.chunkIndex(),
+                    heading,
+                    chunk.content(),
+                    chunk.content().length(),
+                    timestamp
+                );
+            }
+        }
+        return true;
+    }
+
+    public List<RagChunk.RagSearchHit> searchByVector(float[] queryVector, double similarityThreshold, int limit) {
+        if (!isPgVectorAvailable() || queryVector == null || queryVector.length == 0 || limit < 1) {
+            return List.of();
+        }
+        String vectorLiteral = toVectorLiteral(queryVector);
+        return jdbcTemplate.query("""
+                SELECT d.id AS document_id,
+                       d.title AS document_title,
+                       d.filename AS filename,
+                       d.source AS source,
+                       c.chunk_index AS chunk_index,
+                       c.heading AS heading,
+                       c.content AS content,
+                       (1.0 - (c.embedding <=> CAST(? AS vector))) AS similarity
+                FROM rag_chunks c
+                JOIN rag_documents d ON d.id = c.document_id
+                WHERE d.status = 'READY'
+                  AND c.embedding IS NOT NULL
+                  AND (1.0 - (c.embedding <=> CAST(? AS vector))) >= ?
+                ORDER BY c.embedding <=> CAST(? AS vector)
+                LIMIT ?
+                """,
+            (rs, rowNum) -> new RagChunk.RagSearchHit(
+                rs.getObject("document_id", UUID.class),
+                rs.getString("document_title"),
+                rs.getString("filename"),
+                rs.getString("source"),
+                rs.getInt("chunk_index"),
+                rs.getString("heading"),
+                rs.getString("content"),
+                rs.getDouble("similarity")
+            ),
+            vectorLiteral,
+            vectorLiteral,
+            similarityThreshold,
+            vectorLiteral,
+            limit
+        );
+    }
+
+    public List<ReadyChunk> findAllReadyChunks() {
+        return jdbcTemplate.query("""
+                SELECT d.id AS document_id,
+                       d.title AS document_title,
+                       d.filename AS filename,
+                       d.source AS source,
+                       c.chunk_index AS chunk_index,
+                       c.heading AS heading,
+                       c.content AS content
+                FROM rag_chunks c
+                JOIN rag_documents d ON d.id = c.document_id
+                WHERE d.status = 'READY'
+                ORDER BY d.created_at DESC, c.chunk_index ASC
+                """,
+            (rs, rowNum) -> mapReadyChunk(rs)
+        );
+    }
+
+    public List<ReadyChunk> findReadyChunksByDocumentIds(Collection<UUID> documentIds) {
+        if (documentIds == null || documentIds.isEmpty()) {
+            return List.of();
+        }
+        List<UUID> distinctIds = documentIds.stream().filter(Objects::nonNull).distinct().toList();
+        if (distinctIds.isEmpty()) {
+            return List.of();
+        }
+        MapSqlParameterSource params = new MapSqlParameterSource("documentIds", distinctIds);
+        return namedParameterJdbcTemplate.query(
+            FIND_READY_BY_DOCUMENT_IDS_SQL,
+            params,
+            (rs, rowNum) -> mapReadyChunk(rs)
+        );
+    }
+
+    public List<ReadyChunk> searchLexicalCandidates(String normalizedQuery, List<String> terms, int limit) {
+        if (normalizedQuery == null || normalizedQuery.isBlank() || limit < 1) {
+            return List.of();
+        }
+        if (!isPgTrgmAvailable()) {
+            return findAllReadyChunks();
+        }
+        String[] patterns = new String[MAX_SQL_LEXICAL_TERMS + 1];
+        patterns[0] = toLikePattern(normalizedQuery);
+        int slot = 1;
+        if (terms != null) {
+            for (String term : terms) {
+                if (term != null && !term.isBlank() && slot < patterns.length) {
+                    patterns[slot++] = toLikePattern(term.trim());
+                }
+            }
+        }
+        Object[] params = new Object[28];
+        int p = 0;
+        params[p++] = normalizedQuery;
+        params[p++] = normalizedQuery;
+        params[p++] = normalizedQuery;
+        for (int repeat = 0; repeat < 3; repeat++) {
+            for (String pattern : patterns) {
+                params[p++] = pattern;
+            }
+        }
+        params[p++] = normalizedQuery;
+        params[p++] = normalizedQuery;
+        params[p++] = normalizedQuery;
+        params[p] = limit;
+
+        try {
+            return jdbcTemplate.query(SEARCH_LEXICAL_PG_TRGM_SQL, (rs, rowNum) -> mapReadyChunk(rs), params);
+        } catch (RuntimeException exception) {
+            log.warn("PostgreSQL pg_trgm lexical query failed; falling back to full scan ({})", exception.getMessage());
+            return findAllReadyChunks();
+        }
+    }
+
+    private boolean detectPgVector() throws SQLException {
+        if (!isPostgresDatabase()) {
+            return false;
+        }
+        Integer count = jdbcTemplate.queryForObject("""
+                SELECT COUNT(*)
+                FROM information_schema.columns
+                WHERE table_name = 'rag_chunks' AND column_name = 'embedding'
+                """,
+            Integer.class
+        );
+        boolean available = count != null && count > 0;
+        log.info("PostgreSQL pgvector support for rag_chunks: {}", available ? "enabled" : "not found");
+        return available;
+    }
+
+    private boolean detectPgTrgm() throws SQLException {
+        if (!isPostgresDatabase()) {
+            return false;
+        }
+        Integer count = jdbcTemplate.queryForObject("""
+                SELECT COUNT(*)
+                FROM pg_extension
+                WHERE extname = 'pg_trgm'
+                """,
+            Integer.class
+        );
+        boolean available = count != null && count > 0;
+        log.info("PostgreSQL pg_trgm support for rag_chunks: {}", available ? "enabled" : "not found");
+        return available;
+    }
+
+    private boolean isPostgresDatabase() throws SQLException {
+        DataSource dataSource = jdbcTemplate.getDataSource();
+        if (dataSource == null) {
+            return false;
+        }
+        try (Connection connection = dataSource.getConnection()) {
+            String product = connection.getMetaData().getDatabaseProductName();
+            return product != null && product.toLowerCase(Locale.ROOT).contains("postgres");
+        }
+    }
+
+    static String toLikePattern(String term) {
+        String escaped = term
+            .replace("\\", "\\\\")
+            .replace("%", "\\%")
+            .replace("_", "\\_");
+        return "%" + escaped + "%";
+    }
+
+    private static ReadyChunk mapReadyChunk(ResultSet rs) throws SQLException {
+        return new ReadyChunk(
+            rs.getObject("document_id", UUID.class),
+            rs.getString("document_title"),
+            rs.getString("filename"),
+            rs.getString("source"),
+            rs.getInt("chunk_index"),
+            rs.getString("heading"),
+            rs.getString("content")
+        );
+    }
+
+    static String toVectorLiteral(float[] vector) {
+        StringBuilder builder = new StringBuilder(vector.length * 10 + 2);
+        builder.append('[');
+        for (int index = 0; index < vector.length; index++) {
+            if (index > 0) {
+                builder.append(',');
+            }
+            float value = Float.isFinite(vector[index]) ? vector[index] : 0.0f;
+            builder.append(value);
+        }
+        builder.append(']');
+        return builder.toString();
+    }
+
+    private static RagDocument mapDocument(ResultSet rs) throws SQLException {
+        return new RagDocument(
+            rs.getObject("id", UUID.class),
+            rs.getString("source"),
+            rs.getString("filename"),
+            rs.getString("title"),
+            rs.getString("content_type"),
+            rs.getLong("size_bytes"),
+            rs.getString("sha256"),
+            rs.getString("storage_provider"),
+            rs.getString("storage_bucket"),
+            rs.getString("storage_key"),
+            rs.getString("storage_generation"),
+            rs.getString("status"),
+            rs.getInt("chunk_count"),
+            rs.getString("error_message"),
+            rs.getString("uploaded_by"),
+            instant(rs.getObject("created_at", OffsetDateTime.class)),
+            instant(rs.getObject("updated_at", OffsetDateTime.class))
+        );
+    }
+
+    private static Instant instant(OffsetDateTime value) {
+        return value == null ? null : value.toInstant();
+    }
+
+    private static String truncateError(String message) {
+        if (message == null || message.isBlank()) {
+            return null;
+        }
+        return truncate(message.strip(), 1000);
+    }
+
+    private static String truncate(String value, int maxLen) {
+        return value.length() <= maxLen ? value : value.substring(0, maxLen);
+    }
+
+    public record ChunkRecord(int chunkIndex, String heading, String content, float[] embedding) {
+        @Override
+        public boolean equals(Object other) {
+            if (this == other) {
+                return true;
+            }
+            if (!(other instanceof ChunkRecord that)) {
+                return false;
+            }
+            return chunkIndex == that.chunkIndex
+                && Objects.equals(heading, that.heading)
+                && Objects.equals(content, that.content)
+                && Arrays.equals(embedding, that.embedding);
+        }
+
+        @Override
+        public int hashCode() {
+            int result = Objects.hash(chunkIndex, heading, content);
+            return 31 * result + Arrays.hashCode(embedding);
+        }
+
+        @Override
+        public String toString() {
+            return "ChunkRecord[chunkIndex=" + chunkIndex
+                + ", heading=" + heading
+                + ", contentLength=" + (content == null ? 0 : content.length())
+                + ", embeddingDim=" + (embedding == null ? 0 : embedding.length) + "]";
+        }
+    }
+
+    public record ReadyChunk(
+        UUID documentId,
+        String documentTitle,
+        String filename,
+        String source,
+        int chunkIndex,
+        String heading,
+        String content
+    ) {
+    }
+}
