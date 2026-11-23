@@ -64,11 +64,39 @@ public interface AiProvider {
         }
     }
 
-    record Completion(String content, String reasoning, List<ToolCall> toolCalls) {
-        public static final Completion NONE = new Completion(null, null, List.of());
+    record ModelUsage(int inputTokens, int outputTokens) {
+        public static final ModelUsage NONE = new ModelUsage(0, 0);
+
+        public ModelUsage {
+            inputTokens = Math.max(0, inputTokens);
+            outputTokens = Math.max(0, outputTokens);
+        }
+    }
+
+    /**
+     * Runs the same call as {@link #stream} and returns provider token counts when the API sends them.
+     */
+    default ModelUsage consume(
+        List<Message> messages,
+        Consumer<String> onText,
+        Consumer<String> onReasoning,
+        BooleanSupplier isCancelled,
+        boolean thinking
+    ) {
+        stream(messages, onText, onReasoning, isCancelled, thinking);
+        return ModelUsage.NONE;
+    }
+
+    record Completion(String content, String reasoning, List<ToolCall> toolCalls, ModelUsage usage) {
+        public static final Completion NONE = new Completion(null, null, List.of(), ModelUsage.NONE);
+
+        public Completion(String content, String reasoning, List<ToolCall> toolCalls) {
+            this(content, reasoning, toolCalls, ModelUsage.NONE);
+        }
 
         public Completion {
             toolCalls = toolCalls == null ? List.of() : List.copyOf(toolCalls);
+            usage = usage == null ? ModelUsage.NONE : usage;
         }
 
         public boolean hasToolCalls() {

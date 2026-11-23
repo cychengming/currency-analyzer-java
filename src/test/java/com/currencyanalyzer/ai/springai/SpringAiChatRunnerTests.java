@@ -7,6 +7,8 @@ import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.metadata.ChatGenerationMetadata;
+import org.springframework.ai.chat.metadata.ChatResponseMetadata;
+import org.springframework.ai.chat.metadata.DefaultUsage;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
@@ -23,6 +25,7 @@ import java.time.Clock;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -273,6 +276,61 @@ class SpringAiChatRunnerTests {
         ObjectProvider<ChatModel> provider = mock(ObjectProvider.class);
         when(provider.getIfAvailable()).thenReturn(model);
         return provider;
+    }
+
+    @Test
+    void reportsProviderTokenUsageFromTheStream() {
+        ChatModel model = new ChatModel() {
+            @Override
+            public ChatResponse call(Prompt prompt) {
+                throw new UnsupportedOperationException();
+            }
+
+            @Override
+            public Flux<ChatResponse> stream(Prompt prompt) {
+                DeepSeekAssistantMessage message = DeepSeekAssistantMessage.builder().content("Noted.").build();
+                ChatResponseMetadata metadata = ChatResponseMetadata.builder()
+                    .usage(new DefaultUsage(15, 3))
+                    .build();
+                return Flux.just(new ChatResponse(List.of(new Generation(message)), metadata));
+            }
+
+            @Override
+            public ChatOptions getDefaultOptions() {
+                return DeepSeekChatOptions.builder().model("deepseek-flash").build();
+            }
+        };
+        SpringAiChatRunner runner = new SpringAiChatRunner(provider(model), marketTools(), "deepseek-flash", 200);
+        AtomicInteger input = new AtomicInteger();
+        AtomicInteger output = new AtomicInteger();
+        runner.answer("Be brief.", List.of(new SpringAiChatRunner.PriorMessage("user", "Hello", null)),
+            new SpringAiChatRunner.StreamListener() {
+                @Override
+                public void onText(String delta) {
+                }
+
+                @Override
+                public void onReasoning(String delta) {
+                }
+
+                @Override
+                public void onToolStarted(String name) {
+                }
+
+                @Override
+                public void onToolFinished(String name, String argumentsJson, String result, int durationMs) {
+                }
+
+                @Override
+                public void onUsage(int inputTokens, int outputTokens) {
+                    input.set(inputTokens);
+                    output.set(outputTokens);
+                }
+            },
+            () -> false
+        );
+        assertEquals(15, input.get());
+        assertEquals(3, output.get());
     }
 
     private static final class ScriptedChatModel implements ChatModel {

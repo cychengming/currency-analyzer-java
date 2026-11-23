@@ -53,15 +53,39 @@ class KnowledgeRetrieverTests {
     }
 
     @Test
-    void putsRetrievedNoteTitlesIntoTheSystemPrompt() {
-        String prompt = AssistantPrompt.systemMessage(
-            retriever.retrieve("凯利公式", 2),
-            4000
-        );
+    void keepsRetrievedNotesOutOfTheSystemPrompt() {
+        String system = AssistantPrompt.systemMessage();
+        String context = AssistantPrompt.referenceContext(retriever.retrieve("凯利公式", 2), 4000);
 
-        assertTrue(prompt.contains("Knowledge notes:"));
-        assertTrue(prompt.contains("## 凯利公式"));
-        assertTrue(prompt.contains("Never provide personalized buy, sell"));
+        assertTrue(system.contains("Never provide personalized buy, sell"));
+        assertFalse(system.contains("凯利公式"));
+        assertFalse(system.contains(context));
+        assertTrue(context.startsWith("UNTRUSTED REFERENCE CONTEXT"));
+        assertTrue(context.contains("## 凯利公式"));
+        assertTrue(context.contains("END UNTRUSTED REFERENCE CONTEXT"));
+        assertEquals("", AssistantPrompt.referenceContext(List.of(), 4000));
+    }
+
+    @Test
+    void rewritesAFollowUpSoRetrievalStillFindsTheEarlierSubject() {
+        String followUp = "what about his risk view?";
+        assertTrue(retriever.retrieve(followUp, 4).isEmpty());
+
+        String query = RetrievalQueryRewriter.rewrite(List.of(
+            new RetrievalQueryRewriter.SpokenTurn("user", "Tell me about Howard Marks"),
+            new RetrievalQueryRewriter.SpokenTurn("assistant", "He writes about market cycles."),
+            new RetrievalQueryRewriter.SpokenTurn("user", followUp)
+        ));
+
+        assertTrue(query.toLowerCase(java.util.Locale.ROOT).contains("howard marks"));
+        assertTrue(query.contains(followUp));
+        assertTrue(retriever.retrieve(query, 4).stream().anyMatch(note -> note.title().contains("霍华德")));
+        assertEquals(
+            "请用凯利公式解释仓位",
+            RetrievalQueryRewriter.rewrite(List.of(
+                new RetrievalQueryRewriter.SpokenTurn("user", "请用凯利公式解释仓位")
+            ))
+        );
     }
 
     private static KnowledgeLibrary loadFixtureLibrary() {

@@ -72,6 +72,17 @@ public class DeepSeekAiProvider implements AiProvider {
         BooleanSupplier isCancelled,
         boolean thinking
     ) {
+        consume(messages, onText, onReasoning, isCancelled, thinking);
+    }
+
+    @Override
+    public AiProvider.ModelUsage consume(
+        List<Message> messages,
+        Consumer<String> onText,
+        Consumer<String> onReasoning,
+        BooleanSupplier isCancelled,
+        boolean thinking
+    ) {
         if (apiKey.isBlank()) {
             throw new AiProviderException("DeepSeek API key is not configured");
         }
@@ -81,6 +92,7 @@ public class DeepSeekAiProvider implements AiProvider {
             body.put("model", model);
             body.put("messages", messages);
             body.put("stream", true);
+            body.put("stream_options", Map.of("include_usage", true));
             body.put("max_tokens", maxOutputTokens);
             body.put("thinking", Map.of("type", thinking ? "enabled" : "disabled"));
             String payload = objectMapper.writeValueAsString(body);
@@ -104,9 +116,10 @@ public class DeepSeekAiProvider implements AiProvider {
 
                 boolean sawText = false;
                 String finishReason = null;
+                AiProvider.ModelUsage usage = AiProvider.ModelUsage.NONE;
                 for (String line : (Iterable<String>) lines::iterator) {
                     if (isCancelled.getAsBoolean() || Thread.currentThread().isInterrupted()) {
-                        return;
+                        return usage;
                     }
                     if (!line.startsWith("data:")) {
                         continue;
@@ -120,6 +133,9 @@ public class DeepSeekAiProvider implements AiProvider {
                     if (piece.finishReason() != null) {
                         finishReason = piece.finishReason();
                     }
+                    if (piece.usage() != null) {
+                        usage = piece.usage();
+                    }
                 }
                 if (!sawText && !isCancelled.getAsBoolean()) {
                     log.warn(
@@ -127,12 +143,14 @@ public class DeepSeekAiProvider implements AiProvider {
                         finishReason == null ? "unknown" : finishReason
                     );
                 }
+                return usage;
             }
         } catch (InterruptedException exception) {
             Thread.currentThread().interrupt();
             if (!isCancelled.getAsBoolean()) {
                 throw new AiProviderException("DeepSeek request was interrupted", exception);
             }
+            return AiProvider.ModelUsage.NONE;
         } catch (IOException | IllegalArgumentException exception) {
             throw new AiProviderException("Unable to communicate with DeepSeek", exception);
         }
@@ -187,7 +205,8 @@ public class DeepSeekAiProvider implements AiProvider {
     }
 
     private Completion parseCompletion(String body) throws IOException {
-        JsonNode choice = objectMapper.readTree(body).path("choices").path(0);
+        JsonNode root = objectMapper.readTree(body);
+        JsonNode choice = root.path("choices").path(0);
         JsonNode message = choice.path("message");
         String content = message.path("content").isTextual() ? message.path("content").asText() : null;
         String reasoning = message.path("reasoning_content").isTextual()
@@ -210,7 +229,7 @@ public class DeepSeekAiProvider implements AiProvider {
                 finishReason(choice)
             );
         }
-        return new Completion(content, reasoning, toolCalls);
+        return new Completion(content, reasoning, toolCalls, readUsage(root.path("usage")));
     }
 
     private static Map<String, Object> messageBody(Turn message) {
@@ -249,7 +268,8 @@ public class DeepSeekAiProvider implements AiProvider {
 
     private StreamPiece emitTextDelta(String data, Consumer<String> onText, Consumer<String> onReasoning) {
         try {
-            JsonNode choice = objectMapper.readTree(data).path("choices").path(0);
+            JsonNode root = objectMapper.readTree(data);
+            JsonNode choice = root.path("choices").path(0);
             JsonNode delta = choice.path("delta");
             JsonNode reasoning = delta.path("reasoning_content");
             if (onReasoning != null && reasoning.isTextual() && !reasoning.asText().isEmpty()) {
@@ -260,10 +280,22 @@ public class DeepSeekAiProvider implements AiProvider {
             if (text) {
                 onText.accept(content.asText());
             }
-            return new StreamPiece(text, textual(choice.path("finish_reason")));
+            return new StreamPiece(text, textual(choice.path("finish_reason")), readUsage(root.path("usage")));
         } catch (IOException exception) {
             throw new AiProviderException("DeepSeek returned an invalid streaming response", exception);
         }
+    }
+
+    private static AiProvider.ModelUsage readUsage(JsonNode usage) {
+        if (usage == null || usage.isMissingNode() || usage.isNull()) {
+            return null;
+        }
+        int input = usage.path("prompt_tokens").asInt(0);
+        int output = usage.path("completion_tokens").asInt(0);
+        if (input <= 0 && output <= 0) {
+            return null;
+        }
+        return new AiProvider.ModelUsage(input, output);
     }
 
     private static String finishReason(JsonNode choice) {
@@ -278,7 +310,7 @@ public class DeepSeekAiProvider implements AiProvider {
         return node.asText();
     }
 
-    private record StreamPiece(boolean text, String finishReason) {
+    private record StreamPiece(boolean text, String finishReason, AiProvider.ModelUsage usage) {
     }
 
     private static String withoutTrailingSlashes(String value) {

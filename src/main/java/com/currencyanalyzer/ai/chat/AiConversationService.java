@@ -2,8 +2,10 @@ package com.currencyanalyzer.ai.chat;
 
 import com.currencyanalyzer.ai.knowledge.AssistantPrompt;
 import com.currencyanalyzer.ai.knowledge.KnowledgeRetriever;
+import com.currencyanalyzer.ai.knowledge.RetrievalQueryRewriter;
 import com.currencyanalyzer.ai.provider.AiProvider;
 import com.currencyanalyzer.ai.provider.AiProvider.Completion;
+import com.currencyanalyzer.ai.provider.AiProvider.ModelUsage;
 import com.currencyanalyzer.ai.provider.AiProvider.ToolCall;
 import com.currencyanalyzer.ai.provider.AiProvider.Turn;
 import com.currencyanalyzer.ai.provider.AiProviderException;
@@ -44,6 +46,7 @@ public class AiConversationService {
     private final AssistantTools assistantTools;
     private final SpringAiChatRunner springAiChatRunner;
     private final KnowledgeRetriever knowledgeRetriever;
+    private final AiUsageService usageService;
     private final Clock clock;
     private final String provider;
     private final String model;
@@ -60,6 +63,7 @@ public class AiConversationService {
         AssistantTools assistantTools,
         SpringAiChatRunner springAiChatRunner,
         KnowledgeRetriever knowledgeRetriever,
+        AiUsageService usageService,
         Clock clock,
         @Value("${app.ai.provider:deepseek}") String provider,
         @Value("${app.ai.model:deepseek-flash}") String model,
@@ -73,6 +77,7 @@ public class AiConversationService {
         this.assistantTools = assistantTools;
         this.springAiChatRunner = springAiChatRunner;
         this.knowledgeRetriever = knowledgeRetriever;
+        this.usageService = usageService;
         this.clock = clock;
         this.provider = provider;
         this.model = model;
@@ -123,6 +128,7 @@ public class AiConversationService {
         if (!ownsConversation(username, conversationId)) {
             return false;
         }
+        usageService.ensureWithinDailyLimit(username);
 
         ActiveResponse activeResponse = new ActiveResponse(username, emitter);
         if (activeResponses.putIfAbsent(conversationId, activeResponse) != null) {
@@ -172,6 +178,7 @@ public class AiConversationService {
     private void generateResponse(UUID conversationId, ActiveResponse activeResponse, UUID userMessageId) {
         StringBuilder responseText = new StringBuilder();
         StringBuilder reasoningText = new StringBuilder();
+        UsageLedger usage = new UsageLedger();
         try {
             sendEvent(activeResponse.emitter, "message_started", Map.of(
                 "user_message_id", userMessageId.toString()
@@ -179,23 +186,17 @@ public class AiConversationService {
 
             List<AiConversationRepository.AiProviderMessage> history =
                 conversationRepository.findRecentMessages(conversationId);
+            String referenceContext = referenceContext(history);
             List<ToolTrace> toolTraces = new ArrayList<>();
             if (springAiChatRunner.available()) {
-                answerWithSpringAi(history, activeResponse, responseText, reasoningText, toolTraces);
+                answerWithSpringAi(history, referenceContext, activeResponse, responseText, reasoningText, toolTraces, usage);
             } else {
-                List<Turn> prompt = new ArrayList<>(history.size() + 1);
-                prompt.add(Turn.text("system", systemMessage(latestUserText(history))));
-                history.forEach(message -> prompt.add(historyTurn(message)));
+                List<Turn> prompt = promptWithContext(history, referenceContext);
                 boolean usedTools = answerWithTools(
-                    conversationId, activeResponse, prompt, responseText, reasoningText, toolTraces
+                    conversationId, activeResponse, prompt, responseText, reasoningText, toolTraces, usage
                 );
                 if (!usedTools && responseText.isEmpty() && !activeResponse.cancelled.get()) {
-                    aiProvider.stream(
-                        historyWithSystem(prompt),
-                        delta -> appendDelta(activeResponse, responseText, delta),
-                        delta -> appendReasoning(activeResponse, reasoningText, delta),
-                        activeResponse.cancelled::get
-                    );
+                    consumeTracked(prompt, activeResponse, responseText, reasoningText, usage);
                 }
                 if (responseText.isEmpty() && !activeResponse.cancelled.get()) {
                     retryWithoutThinking(activeResponse, prompt, responseText, reasoningText);
@@ -243,6 +244,18 @@ public class AiConversationService {
                 }
             }
         } finally {
+            try {
+                usageService.record(
+                    activeResponse.username,
+                    conversationId,
+                    model,
+                    usage.inputTokens,
+                    usage.outputTokens,
+                    usage.requests
+                );
+            } catch (RuntimeException exception) {
+                log.warn("Unable to record AI usage for conversation {}", conversationId);
+            }
             activeResponses.remove(conversationId, activeResponse);
             activeResponse.emitter.complete();
         }
@@ -281,16 +294,16 @@ public class AiConversationService {
 
     private void answerWithSpringAi(
         List<AiConversationRepository.AiProviderMessage> history,
+        String referenceContext,
         ActiveResponse activeResponse,
         StringBuilder responseText,
         StringBuilder reasoningText,
-        List<ToolTrace> toolTraces
+        List<ToolTrace> toolTraces,
+        UsageLedger usage
     ) {
-        List<SpringAiChatRunner.PriorMessage> prior = history.stream()
-            .map(message -> new SpringAiChatRunner.PriorMessage(message.role(), message.content(), message.reasoning()))
-            .toList();
+        List<SpringAiChatRunner.PriorMessage> prior = priorWithContext(history, referenceContext);
         springAiChatRunner.answer(
-            systemMessage(latestUserText(history)),
+            AssistantPrompt.systemMessage(),
             prior,
             new SpringAiChatRunner.StreamListener() {
                 @Override
@@ -306,6 +319,11 @@ public class AiConversationService {
                 @Override
                 public void onToolStarted(String name) {
                     sendEvent(activeResponse.emitter, "tool_started", Map.of("tool", name));
+                }
+
+                @Override
+                public void onUsage(int inputTokens, int outputTokens) {
+                    usage.add(new ModelUsage(inputTokens, outputTokens));
                 }
 
                 @Override
@@ -334,15 +352,17 @@ public class AiConversationService {
         List<Turn> prompt,
         StringBuilder responseText,
         StringBuilder reasoningText,
-        List<ToolTrace> toolTraces
+        List<ToolTrace> toolTraces,
+        UsageLedger usage
     ) {
         boolean usedTools = false;
         for (int round = 0; round < MAX_TOOL_ROUNDS && !activeResponse.cancelled.get(); round++) {
             boolean forceAnswer = usedTools && round == MAX_TOOL_ROUNDS - 1;
-            Completion completion = aiProvider.complete(
+            Completion completion = completeTracked(
                 prompt,
                 forceAnswer ? List.of() : assistantTools.definitions(),
-                activeResponse.cancelled::get
+                activeResponse,
+                usage
             );
             appendReasoning(activeResponse, reasoningText, completion.reasoning());
             appendDelta(activeResponse, responseText, completion.content());
@@ -363,11 +383,48 @@ public class AiConversationService {
             }
         }
         if (usedTools && responseText.isEmpty() && !activeResponse.cancelled.get()) {
-            Completion completion = aiProvider.complete(prompt, List.of(), activeResponse.cancelled::get);
+            Completion completion = completeTracked(prompt, List.of(), activeResponse, usage);
             appendReasoning(activeResponse, reasoningText, completion.reasoning());
             appendDelta(activeResponse, responseText, completion.content());
         }
         return usedTools || responseText.length() > 0;
+    }
+
+    private void consumeTracked(
+        List<Turn> prompt,
+        ActiveResponse activeResponse,
+        StringBuilder responseText,
+        StringBuilder reasoningText,
+        UsageLedger usage
+    ) {
+        ModelUsage consumed = ModelUsage.NONE;
+        try {
+            consumed = aiProvider.consume(
+                historyWithSystem(prompt),
+                delta -> appendDelta(activeResponse, responseText, delta),
+                delta -> appendReasoning(activeResponse, reasoningText, delta),
+                activeResponse.cancelled::get,
+                true
+            );
+        } finally {
+            usage.add(consumed);
+        }
+    }
+
+    private Completion completeTracked(
+        List<Turn> prompt,
+        List<AiProvider.ToolDefinition> tools,
+        ActiveResponse activeResponse,
+        UsageLedger usage
+    ) {
+        try {
+            Completion completion = aiProvider.complete(prompt, tools, activeResponse.cancelled::get);
+            usage.add(completion.usage());
+            return completion;
+        } catch (RuntimeException exception) {
+            usage.add(ModelUsage.NONE);
+            throw exception;
+        }
     }
 
     private Turn executeTool(
@@ -433,24 +490,61 @@ public class AiConversationService {
         return value.substring(0, maxChars);
     }
 
-    private String systemMessage(String userMessage) {
+    private String referenceContext(List<AiConversationRepository.AiProviderMessage> history) {
         if (!knowledgeEnabled) {
-            return AssistantPrompt.systemMessage(List.of(), 0);
+            return "";
         }
-        return AssistantPrompt.systemMessage(
-            knowledgeRetriever.retrieve(userMessage, knowledgeMaxNotes),
+        String query = RetrievalQueryRewriter.rewrite(history.stream()
+            .map(message -> new RetrievalQueryRewriter.SpokenTurn(message.role(), message.content()))
+            .toList());
+        if (query.isBlank()) {
+            return "";
+        }
+        return AssistantPrompt.referenceContext(
+            knowledgeRetriever.retrieve(query, knowledgeMaxNotes),
             knowledgeMaxChars
         );
     }
 
-    private static String latestUserText(List<AiConversationRepository.AiProviderMessage> history) {
-        for (int index = history.size() - 1; index >= 0; index--) {
+    private static List<Turn> promptWithContext(
+        List<AiConversationRepository.AiProviderMessage> history,
+        String referenceContext
+    ) {
+        List<Turn> prompt = new ArrayList<>(history.size() + 2);
+        prompt.add(Turn.text("system", AssistantPrompt.systemMessage()));
+        int lastUser = lastUserIndex(history);
+        for (int index = 0; index < history.size(); index++) {
+            if (index == lastUser && referenceContext != null && !referenceContext.isBlank()) {
+                prompt.add(Turn.text("user", referenceContext));
+            }
+            prompt.add(historyTurn(history.get(index)));
+        }
+        return prompt;
+    }
+
+    private static List<SpringAiChatRunner.PriorMessage> priorWithContext(
+        List<AiConversationRepository.AiProviderMessage> history,
+        String referenceContext
+    ) {
+        List<SpringAiChatRunner.PriorMessage> prior = new ArrayList<>(history.size() + 1);
+        int lastUser = lastUserIndex(history);
+        for (int index = 0; index < history.size(); index++) {
+            if (index == lastUser && referenceContext != null && !referenceContext.isBlank()) {
+                prior.add(new SpringAiChatRunner.PriorMessage("user", referenceContext, null));
+            }
             AiConversationRepository.AiProviderMessage message = history.get(index);
-            if ("user".equals(message.role())) {
-                return message.content();
+            prior.add(new SpringAiChatRunner.PriorMessage(message.role(), message.content(), message.reasoning()));
+        }
+        return prior;
+    }
+
+    private static int lastUserIndex(List<AiConversationRepository.AiProviderMessage> history) {
+        for (int index = history.size() - 1; index >= 0; index--) {
+            if ("user".equals(history.get(index).role())) {
+                return index;
             }
         }
-        return "";
+        return -1;
     }
 
     private static void sendEvent(SseEmitter emitter, String eventName, Object data) {
@@ -458,6 +552,21 @@ public class AiConversationService {
             emitter.send(SseEmitter.event().name(eventName).data(data, MediaType.APPLICATION_JSON));
         } catch (IOException exception) {
             throw new IllegalStateException("Unable to write the assistant response stream", exception);
+        }
+    }
+
+    private static final class UsageLedger {
+        private int inputTokens;
+        private int outputTokens;
+        private int requests;
+
+        private void add(ModelUsage usage) {
+            requests++;
+            if (usage == null) {
+                return;
+            }
+            inputTokens += usage.inputTokens();
+            outputTokens += usage.outputTokens();
         }
     }
 

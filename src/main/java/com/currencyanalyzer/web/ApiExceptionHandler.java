@@ -1,6 +1,7 @@
 package com.currencyanalyzer.web;
 
 import com.currencyanalyzer.ai.chat.AiResponseInProgressException;
+import com.currencyanalyzer.ai.chat.AiUsageLimitException;
 import com.currencyanalyzer.storage.StorageException;
 import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
@@ -27,6 +28,16 @@ public class ApiExceptionHandler {
         return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of(
             "success", false,
             "error", exception.getMessage()
+        ));
+    }
+
+    @ExceptionHandler(AiUsageLimitException.class)
+    public ResponseEntity<Map<String, Object>> usageLimit(
+        AiUsageLimitException exception
+    ) {
+        return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS).body(Map.of(
+            "success", false,
+            "error", exception.getMessage() == null ? "Daily AI limit reached" : exception.getMessage()
         ));
     }
 
