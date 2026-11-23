@@ -11,6 +11,9 @@ import org.springframework.http.client.JdkClientHttpRequestFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClient;
 
+import java.net.InetSocketAddress;
+import java.net.ProxySelector;
+import java.net.URI;
 import java.net.http.HttpClient;
 import java.time.Clock;
 import java.time.Duration;
@@ -40,6 +43,7 @@ public class MarketDataService {
 
     private static final Logger log = LoggerFactory.getLogger(MarketDataService.class);
     private static final int MAX_HISTORY_DAYS = 3650;
+    private static final String HTTP_USER_AGENT = "Mozilla/5.0 (compatible; CurrencyAnalyzer/1.0)";
 
     private static final Map<String, String> COMMODITY_SYMBOLS = Map.ofEntries(
         Map.entry("GOLD/USD", "GC=F"),
@@ -110,13 +114,54 @@ public class MarketDataService {
     }
 
     private static RestClient buildRestClient(RestClient.Builder restClientBuilder) {
-        HttpClient httpClient = HttpClient.newBuilder()
+        HttpClient.Builder httpClientBuilder = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(5))
-            .followRedirects(HttpClient.Redirect.NORMAL)
-            .build();
-        JdkClientHttpRequestFactory requestFactory = new JdkClientHttpRequestFactory(httpClient);
+            .followRedirects(HttpClient.Redirect.NORMAL);
+        InetSocketAddress proxyAddress = resolveProxyAddress();
+        if (proxyAddress != null) {
+            log.info("Configuring market data HTTP client with proxy {}", proxyAddress);
+            httpClientBuilder.proxy(ProxySelector.of(proxyAddress));
+        }
+        JdkClientHttpRequestFactory requestFactory = new JdkClientHttpRequestFactory(httpClientBuilder.build());
         requestFactory.setReadTimeout(Duration.ofSeconds(12));
         return restClientBuilder.requestFactory(requestFactory).build();
+    }
+
+    static InetSocketAddress resolveProxyAddress() {
+        for (String envName : List.of("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy")) {
+            InetSocketAddress parsed = parseProxyAddress(System.getenv(envName));
+            if (parsed != null) {
+                return parsed;
+            }
+        }
+        return null;
+    }
+
+    static InetSocketAddress parseProxyAddress(String proxyUrl) {
+        if (proxyUrl == null || proxyUrl.isBlank()) {
+            return null;
+        }
+        String candidate = proxyUrl.trim();
+        if (!candidate.contains("://")) {
+            candidate = "http://" + candidate;
+        }
+        try {
+            URI uri = URI.create(candidate);
+            String host = uri.getHost();
+            if (host == null || host.isBlank()) {
+                return null;
+            }
+            int port = uri.getPort();
+            if (port <= 0) {
+                port = "https".equalsIgnoreCase(uri.getScheme()) ? 443 : 80;
+            }
+            if (port > 65535) {
+                return null;
+            }
+            return new InetSocketAddress(host, port);
+        } catch (IllegalArgumentException exception) {
+            return null;
+        }
     }
 
     public List<HistoricalPoint> fetchHistorical(String requestedPair, int requestedDays) {
@@ -148,28 +193,7 @@ public class MarketDataService {
                 symbols.put(pair, symbol);
             }
         }
-        if (symbols.isEmpty()) {
-            return Map.of();
-        }
-
-        Map<String, LiveRate> rates = new LinkedHashMap<>();
-        try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
-            Map<String, Future<Optional<LiveRate>>> tasks = new LinkedHashMap<>();
-            symbols.forEach((pair, symbol) ->
-                tasks.put(pair, executor.submit(() -> fetchYahooLiveRate(symbol))));
-
-            tasks.forEach((pair, task) -> {
-                try {
-                    task.get(15, TimeUnit.SECONDS).ifPresent(rate -> rates.put(pair, rate));
-                } catch (InterruptedException exception) {
-                    Thread.currentThread().interrupt();
-                    log.warn("Interrupted while fetching {}", pair);
-                } catch (ExecutionException | TimeoutException exception) {
-                    log.warn("Unable to fetch commodity quote for {}: {}", pair, rootMessage(exception));
-                }
-            });
-        }
-        return rates;
+        return fetchYahooRatesBySymbol(symbols);
     }
 
     private Map<String, LiveRate> fetchFxRates() {
@@ -180,6 +204,17 @@ public class MarketDataService {
             return Map.of();
         }
 
+        Map<String, LiveRate> rates = new LinkedHashMap<>(fetchFxRatesFromYahoo(fxPairs));
+        List<String> missingPairs = fxPairs.stream()
+            .filter(pair -> !rates.containsKey(pair))
+            .toList();
+        if (!missingPairs.isEmpty()) {
+            rates.putAll(fetchFxRatesFromFrankfurter(missingPairs));
+        }
+        return rates;
+    }
+
+    private Map<String, LiveRate> fetchFxRatesFromFrankfurter(List<String> fxPairs) {
         Set<String> currencies = new LinkedHashSet<>();
         for (String pair : fxPairs) {
             String[] parts = pair.split("/");
@@ -213,7 +248,7 @@ public class MarketDataService {
             return rates;
         } catch (RuntimeException exception) {
             log.warn("Unable to fetch FX rates from Frankfurter: {}", rootMessage(exception));
-            return fetchFxRatesFromYahoo(fxPairs);
+            return Map.of();
         }
     }
 
@@ -238,20 +273,33 @@ public class MarketDataService {
     }
 
     private Map<String, LiveRate> fetchFxRatesFromYahoo(List<String> pairs) {
+        Map<String, String> symbols = new LinkedHashMap<>();
+        for (String pair : pairs) {
+            symbols.put(pair, pair.replace("/", "") + "=X");
+        }
+        return fetchYahooRatesBySymbol(symbols);
+    }
+
+    private Map<String, LiveRate> fetchYahooRatesBySymbol(Map<String, String> symbols) {
+        if (symbols.isEmpty()) {
+            return Map.of();
+        }
         Map<String, LiveRate> rates = new LinkedHashMap<>();
         try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
-            for (String pair : pairs) {
-                String symbol = pair.replace("/", "") + "=X";
-                Future<Optional<LiveRate>> task = executor.submit(() -> fetchYahooLiveRate(symbol));
+            Map<String, Future<Optional<LiveRate>>> tasks = new LinkedHashMap<>();
+            symbols.forEach((pair, symbol) ->
+                tasks.put(pair, executor.submit(() -> fetchYahooLiveRate(symbol))));
+
+            tasks.forEach((pair, task) -> {
                 try {
                     task.get(15, TimeUnit.SECONDS).ifPresent(rate -> rates.put(pair, rate));
                 } catch (InterruptedException exception) {
                     Thread.currentThread().interrupt();
-                    break;
+                    log.warn("Interrupted while fetching {}", pair);
                 } catch (ExecutionException | TimeoutException exception) {
-                    log.warn("Unable to fetch Yahoo FX quote for {}: {}", pair, rootMessage(exception));
+                    log.warn("Unable to fetch Yahoo quote for {}: {}", pair, rootMessage(exception));
                 }
-            }
+            });
         }
         return rates;
     }
@@ -367,21 +415,70 @@ public class MarketDataService {
     }
 
     private Optional<LiveRate> fetchYahooLiveRate(String symbol) {
-        List<HistoricalPoint> history = fetchYahooHistory(symbol, 10);
-        if (history.isEmpty()) {
+        try {
+            JsonNode payload = getJson(
+                "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?range=5d&interval=1d",
+                symbol
+            );
+            JsonNode result = payload.path("chart").path("result").path(0);
+            if (!result.isObject()) {
+                return Optional.empty();
+            }
+
+            JsonNode meta = result.path("meta");
+            List<Double> closes = extractValidCloses(result);
+
+            Double current = positiveNumber(meta.path("regularMarketPrice"));
+            if (current == null) {
+                if (closes.isEmpty()) {
+                    return Optional.empty();
+                }
+                current = closes.getLast();
+            }
+
+            Double previous = positiveNumber(meta.path("chartPreviousClose"));
+            if (previous == null) {
+                previous = positiveNumber(meta.path("previousClose"));
+            }
+            if (previous == null) {
+                previous = closes.size() >= 2 ? closes.get(closes.size() - 2) : current;
+            }
+
+            double change = current - previous;
+            double percent = previous == 0 ? 0 : change / previous * 100;
+            return Optional.of(new LiveRate(round4(current), round4(change), round2(percent)));
+        } catch (RuntimeException exception) {
+            log.warn("Unable to fetch Yahoo live quote for {}: {}", symbol, rootMessage(exception));
             return Optional.empty();
         }
+    }
 
-        HistoricalPoint latest = history.getLast();
-        double previous = history.size() >= 2 ? history.get(history.size() - 2).rate() : latest.rate();
-        double change = latest.rate() - previous;
-        double percent = previous == 0 ? 0 : change / previous * 100;
-        return Optional.of(new LiveRate(round4(latest.rate()), round4(change), round2(percent)));
+    private static List<Double> extractValidCloses(JsonNode result) {
+        JsonNode closesNode = result.path("indicators").path("quote").path(0).path("close");
+        if (!closesNode.isArray()) {
+            return List.of();
+        }
+        List<Double> closes = new ArrayList<>();
+        for (JsonNode close : closesNode) {
+            if (close.isNumber() && Double.isFinite(close.asDouble())) {
+                closes.add(close.asDouble());
+            }
+        }
+        return closes;
+    }
+
+    private static Double positiveNumber(JsonNode node) {
+        if (!node.isNumber()) {
+            return null;
+        }
+        double value = node.asDouble();
+        return Double.isFinite(value) && value > 0 ? value : null;
     }
 
     private JsonNode getJson(String uriTemplate, Object... variables) {
         String response = restClient.get()
             .uri(uriTemplate, variables)
+            .header("User-Agent", HTTP_USER_AGENT)
             .retrieve()
             .body(String.class);
         if (response == null || response.isBlank()) {
