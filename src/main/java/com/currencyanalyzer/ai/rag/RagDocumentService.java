@@ -330,7 +330,7 @@ public class RagDocumentService {
             }
         }
         if (!listingMatchesIndex) {
-            log.info("Skipping RAG prune for prefix {}: listing does not match indexed uploads", scopedPrefix);
+            log.info("Skipping RAG prune because the listing does not match indexed uploads");
             return 0;
         }
         int deleted = 0;
