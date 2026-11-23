@@ -3,6 +3,7 @@ package com.currencyanalyzer.ai.rag;
 import org.junit.jupiter.api.Test;
 
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -144,6 +145,66 @@ class TextDocumentParserTests {
         for (DocumentParser.ParsedChunk chunk : parsed.chunks()) {
             assertTrue(TextDocumentParser.weightedLength(chunk.content()) <= 520);
             assertTrue(chunk.content().length() <= 260);
+        }
+    }
+
+    @Test
+    void parsesQuotedCommasAndMultilineCsvFields() {
+        String csv = """
+            name,note
+            "Howard Marks, Oaktree","He writes:
+            ""memos"" about risk"
+            plain,row
+            """;
+
+        List<String> records = TextDocumentParser.csvRecords(csv.replace("\r\n", "\n"));
+        assertTrue(records.stream().anyMatch(record ->
+            record.contains("Howard Marks, Oaktree") && record.contains("\n") && record.contains("memos")
+        ));
+
+        DocumentParser.ParsedDocument parsed = parser.parse("investors.csv", csv.getBytes(StandardCharsets.UTF_8), null);
+        String joined = parsed.chunks().stream()
+            .map(DocumentParser.ParsedChunk::content)
+            .reduce("", (left, right) -> left + "\n" + right);
+        assertTrue(joined.contains("Howard Marks, Oaktree"));
+        assertTrue(joined.contains("memos"));
+        assertTrue(joined.contains("plain,row"));
+        assertFalse(joined.contains("\"He writes:\nplain"));
+    }
+
+    @Test
+    void fullChineseChunkWithTitleAndLeadFitsEmbeddingWindow() {
+        TextDocumentParser cjkParser = new TextDocumentParser(520, 80, 50);
+        String title = "凯利公式与仓位管理".repeat(8);
+        String body = """
+            # %s
+
+            本文讨论在已知胜率和赔率时如何限制单笔风险。
+
+            ## 仓位
+            %s
+
+            ## 回撤
+            %s
+            """.formatted(
+            title,
+            "凯利公式用于衡量胜率和赔率已知时的最优仓位，并结合波动约束。".repeat(12),
+            "回撤约束用来避免极端亏损，仓位必须留有安全边际。".repeat(12)
+        );
+
+        DocumentParser.ParsedDocument parsed = cjkParser.parse("kelly-zh.md", body.getBytes(StandardCharsets.UTF_8), null);
+        String lead = RagIngestionService.extractDocumentLead(parsed.chunks());
+        assertFalse(lead.isBlank());
+        assertTrue(parsed.chunks().size() >= 2);
+
+        for (DocumentParser.ParsedChunk chunk : parsed.chunks()) {
+            String embedded = RagIngestionService.embeddingInput(parsed.title(), lead, chunk);
+            assertTrue(
+                TextDocumentParser.estimateTokens(embedded) <= TextDocumentParser.EMBEDDING_TOKEN_WINDOW,
+                () -> "embedding length " + TextDocumentParser.estimateTokens(embedded)
+            );
+            assertTrue(embedded.contains(chunk.content()));
+            assertTrue(TextDocumentParser.estimateTokens(chunk.content()) <= TextDocumentParser.MAX_CHUNK_TOKENS);
         }
     }
 }

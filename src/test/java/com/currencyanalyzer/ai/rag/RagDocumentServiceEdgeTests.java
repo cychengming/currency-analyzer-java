@@ -3,16 +3,19 @@ package com.currencyanalyzer.ai.rag;
 import com.currencyanalyzer.CurrencyAnalyzerApplication;
 import com.currencyanalyzer.ai.knowledge.KnowledgeLibrary;
 import com.currencyanalyzer.ai.knowledge.KnowledgeNote;
+import com.currencyanalyzer.storage.LocalObjectStorageClient;
 import com.currencyanalyzer.storage.ObjectStorageClient;
 import com.currencyanalyzer.storage.StorageException;
 import com.currencyanalyzer.web.ApiExceptionHandler;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.web.multipart.MaxUploadSizeExceededException;
 
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Path;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
@@ -20,6 +23,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
@@ -27,7 +32,9 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -132,10 +139,11 @@ class RagDocumentServiceEdgeTests {
         when(storage.bucketName()).thenReturn("currency-analyze");
 
         UUID existingId = UUID.randomUUID();
+        Instant indexedAt = clock.instant().minusSeconds(60);
         RagDocument existingDoc = new RagDocument(
             existingId, RagDocument.SOURCE_UPLOAD, "existing.md", "Old Title", "text/markdown; charset=utf-8",
             20L, "old-sha", "gcs", "currency-analyze", "knowledge/existing.md", "1",
-            RagDocument.STATUS_READY, 1, null, "alice", clock.instant(), clock.instant()
+            RagDocument.STATUS_READY, 1, null, "alice", indexedAt, indexedAt
         );
         byte[] updatedBytes = "# Updated Title\nNew body content here.".getBytes(StandardCharsets.UTF_8);
 
@@ -149,7 +157,7 @@ class RagDocumentServiceEdgeTests {
         RagDocument removedDoc = new RagDocument(
             removedId, RagDocument.SOURCE_UPLOAD, "deleted.md", "Deleted", "text/markdown; charset=utf-8",
             20L, "del-sha", "gcs", "currency-analyze", "knowledge/deleted.md", "1",
-            RagDocument.STATUS_READY, 1, null, "alice", clock.instant(), clock.instant()
+            RagDocument.STATUS_READY, 1, null, "alice", indexedAt, indexedAt
         );
         when(repository.findUploadsByPrefix("gcs", "knowledge/")).thenReturn(List.of(existingDoc, removedDoc));
         when(repository.deleteById(removedId)).thenReturn(true);
@@ -254,6 +262,220 @@ class RagDocumentServiceEdgeTests {
             restoreProp("http.proxyPort", prevHttpPort);
             restoreProp("http.nonProxyHosts", prevNonProxy);
         }
+    }
+
+    @Test
+    void oneBadObjectDoesNotAbortSyncOrSkipPrune() {
+        RagDocumentRepository repository = mock(RagDocumentRepository.class);
+        ObjectStorageClient storage = mock(ObjectStorageClient.class);
+        RagIngestionService ingestion = mock(RagIngestionService.class);
+        TextDocumentParser parser = new TextDocumentParser(600, 100, 50);
+        when(storage.providerName()).thenReturn("gcs");
+        when(storage.bucketName()).thenReturn("currency-analyze");
+
+        byte[] fresh = "# Fresh\n\nThis note is queued after the bad object.\n".getBytes(StandardCharsets.UTF_8);
+        Instant indexedAt = clock.instant().minusSeconds(120);
+        UUID keptId = UUID.randomUUID();
+        UUID removedId = UUID.randomUUID();
+        RagDocument kept = new RagDocument(
+            keptId, RagDocument.SOURCE_UPLOAD, "good.md", "Good", "text/markdown",
+            12L, "sha-good", "gcs", "currency-analyze", "knowledge/good.md", "1",
+            RagDocument.STATUS_READY, 1, null, "alice", indexedAt, indexedAt
+        );
+        RagDocument removed = new RagDocument(
+            removedId, RagDocument.SOURCE_UPLOAD, "removed.md", "Removed", "text/markdown",
+            12L, "sha", "gcs", "currency-analyze", "knowledge/removed.md", "1",
+            RagDocument.STATUS_READY, 1, null, "alice", indexedAt, indexedAt
+        );
+        when(storage.list("knowledge/")).thenReturn(List.of(
+            new ObjectStorageClient.StoredObjectSummary("knowledge/bad.md", 10L, "text/markdown", "1"),
+            new ObjectStorageClient.StoredObjectSummary("knowledge/good.md", 12L, "text/markdown", "1"),
+            new ObjectStorageClient.StoredObjectSummary("knowledge/fresh.md", fresh.length, "text/markdown", "1")
+        ));
+        when(storage.get("knowledge/bad.md")).thenThrow(new StorageException("corrupt object"));
+        when(storage.get("knowledge/fresh.md")).thenReturn(Optional.of(fresh));
+        when(repository.findByStorage("gcs", "knowledge/bad.md")).thenReturn(Optional.empty());
+        when(repository.findByStorage("gcs", "knowledge/good.md")).thenReturn(Optional.of(kept));
+        when(repository.findByStorage("gcs", "knowledge/fresh.md")).thenReturn(Optional.empty());
+        when(repository.findUploadsByPrefix("gcs", "knowledge/")).thenReturn(List.of(kept, removed));
+        when(repository.deleteById(removedId)).thenReturn(true);
+
+        RagDocumentService service = new RagDocumentService(
+            repository, storage, parser, ingestion, new KnowledgeLibrary(List.of()), clock, "knowledge", 5_000_000L
+        );
+        RagSyncSummary summary = service.syncFromStorage(null, "admin");
+
+        assertEquals(1, summary.queued());
+        assertEquals(1, summary.skipped());
+        assertEquals(1, summary.ignored());
+        assertEquals(1, summary.deleted());
+        verify(ingestion).enqueue(any(), anyString(), eq("fresh.md"), any(), eq(fresh));
+        verify(storage, never()).get("knowledge/good.md");
+        verify(repository).deleteById(removedId);
+    }
+
+    @Test
+    void pruneKeepsRowsUploadedAfterListAndIgnoresEmptyOrForeignListings() {
+        RagDocumentRepository repository = mock(RagDocumentRepository.class);
+        ObjectStorageClient storage = mock(ObjectStorageClient.class);
+        RagIngestionService ingestion = mock(RagIngestionService.class);
+        TextDocumentParser parser = new TextDocumentParser(600, 100, 50);
+        when(storage.providerName()).thenReturn("gcs");
+        when(storage.bucketName()).thenReturn("currency-analyze");
+
+        Instant listedAt = clock.instant();
+        Instant earlier = listedAt.minusSeconds(30);
+        UUID keptId = UUID.randomUUID();
+        UUID lateId = UUID.randomUUID();
+        UUID foreignId = UUID.randomUUID();
+        UUID removedId = UUID.randomUUID();
+        RagDocument kept = uploadRow(keptId, "knowledge/kept.md", "currency-analyze", earlier);
+        RagDocument late = uploadRow(lateId, "knowledge/late.md", "currency-analyze", listedAt);
+        RagDocument foreign = uploadRow(foreignId, "knowledge/foreign.md", "other-bucket", earlier);
+        RagDocument removed = uploadRow(removedId, "knowledge/removed.md", "currency-analyze", earlier);
+
+        when(storage.list("knowledge/")).thenReturn(List.of(
+            new ObjectStorageClient.StoredObjectSummary("knowledge/kept.md", 20L, "text/markdown", "1")
+        ));
+        when(repository.findByStorage("gcs", "knowledge/kept.md")).thenReturn(Optional.of(kept));
+        when(repository.findUploadsByPrefix("gcs", "knowledge/")).thenReturn(List.of(kept, late, foreign, removed));
+        when(repository.deleteById(removedId)).thenReturn(true);
+
+        RagDocumentService service = new RagDocumentService(
+            repository, storage, parser, ingestion, new KnowledgeLibrary(List.of()), clock, "knowledge", 5_000_000L
+        );
+        RagSyncSummary partial = service.syncFromStorage(null, "admin");
+        assertEquals(1, partial.skipped());
+        assertEquals(1, partial.deleted());
+        verify(repository).deleteById(removedId);
+        verify(repository, never()).deleteById(lateId);
+        verify(repository, never()).deleteById(foreignId);
+        verify(repository, never()).deleteById(keptId);
+
+        when(storage.list("knowledge/")).thenReturn(List.of());
+        when(repository.findUploadsByPrefix("gcs", "knowledge/")).thenReturn(List.of(kept, late));
+        RagSyncSummary empty = service.syncFromStorage(null, "admin");
+        assertEquals(0, empty.scanned());
+        assertEquals(0, empty.deleted());
+
+        when(storage.bucketName()).thenReturn("wrong-bucket");
+        when(storage.list("knowledge/")).thenReturn(List.of(
+            new ObjectStorageClient.StoredObjectSummary("knowledge/other.md", 8L, "text/markdown", "9")
+        ));
+        when(repository.findByStorage("gcs", "knowledge/other.md")).thenReturn(Optional.empty());
+        when(storage.get("knowledge/other.md")).thenReturn(Optional.of("# Other\nUnrelated body.\n".getBytes(StandardCharsets.UTF_8)));
+        RagSyncSummary wrongBucket = service.syncFromStorage(null, "admin");
+        assertEquals(0, wrongBucket.deleted());
+        verify(repository, never()).deleteById(keptId);
+    }
+
+    @Test
+    void uploadThenSyncDoesNotRereadReadyLocalFile(@TempDir Path tempDir) {
+        LocalObjectStorageClient local = new LocalObjectStorageClient(tempDir.resolve("uploads").toString());
+        AtomicInteger gets = new AtomicInteger();
+        ObjectStorageClient storage = new ObjectStorageClient() {
+            @Override
+            public String providerName() {
+                return local.providerName();
+            }
+
+            @Override
+            public String bucketName() {
+                return local.bucketName();
+            }
+
+            @Override
+            public StoredObject put(String objectKey, byte[] content, String contentType) {
+                return local.put(objectKey, content, contentType);
+            }
+
+            @Override
+            public Optional<byte[]> get(String objectKey) {
+                gets.incrementAndGet();
+                return local.get(objectKey);
+            }
+
+            @Override
+            public boolean delete(String objectKey) {
+                return local.delete(objectKey);
+            }
+
+            @Override
+            public List<StoredObjectSummary> list(String prefix) {
+                return local.list(prefix);
+            }
+        };
+
+        RagDocumentRepository repository = mock(RagDocumentRepository.class);
+        RagIngestionService ingestion = mock(RagIngestionService.class);
+        AtomicReference<RagDocument> inserted = new AtomicReference<>();
+        when(repository.insert(any(RagDocument.class))).thenAnswer(invocation -> {
+            inserted.set(invocation.getArgument(0));
+            return inserted.get();
+        });
+        when(repository.findByStorage(anyString(), anyString())).thenAnswer(invocation -> readyCopy(inserted.get(), invocation.getArgument(1)));
+        when(repository.findUploadsByPrefix(anyString(), anyString())).thenAnswer(invocation -> {
+            RagDocument pending = inserted.get();
+            return pending == null ? List.of() : List.of(readyDocument(pending));
+        });
+
+        RagDocumentService service = new RagDocumentService(
+            repository,
+            storage,
+            new TextDocumentParser(200, 40, 50),
+            ingestion,
+            new KnowledgeLibrary(List.of()),
+            clock,
+            "knowledge",
+            5_000_000L
+        );
+        byte[] body = "# Local note\n\nUploaded once, then synced.\n".getBytes(StandardCharsets.UTF_8);
+        service.upload("note.md", body, null, "alice");
+        assertEquals(0, gets.get());
+
+        RagSyncSummary summary = service.syncFromStorage(null, "alice");
+        assertEquals(0, gets.get());
+        assertEquals(1, summary.scanned());
+        assertEquals(1, summary.skipped());
+        assertEquals(0, summary.queued());
+    }
+
+    private static RagDocument uploadRow(UUID id, String key, String bucket, Instant createdAt) {
+        String filename = key.substring(key.lastIndexOf('/') + 1);
+        return new RagDocument(
+            id, RagDocument.SOURCE_UPLOAD, filename, filename, "text/markdown",
+            20L, "sha-" + id, "gcs", bucket, key, "1",
+            RagDocument.STATUS_READY, 1, null, "alice", createdAt, createdAt
+        );
+    }
+
+    private static Optional<RagDocument> readyCopy(RagDocument pending, String key) {
+        if (pending == null || !pending.storageKey().equals(key)) {
+            return Optional.empty();
+        }
+        return Optional.of(readyDocument(pending));
+    }
+
+    private static RagDocument readyDocument(RagDocument pending) {
+        return new RagDocument(
+            pending.id(),
+            pending.source(),
+            pending.filename(),
+            pending.title(),
+            pending.contentType(),
+            pending.sizeBytes(),
+            pending.sha256(),
+            pending.storageProvider(),
+            pending.storageBucket(),
+            pending.storageKey(),
+            pending.storageGeneration(),
+            RagDocument.STATUS_READY,
+            1,
+            null,
+            pending.uploadedBy(),
+            pending.createdAt(),
+            pending.updatedAt()
+        );
     }
 
     private static void restoreProp(String key, String value) {

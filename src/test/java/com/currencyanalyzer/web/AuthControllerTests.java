@@ -76,4 +76,27 @@ class AuthControllerTests {
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.success").value(true));
     }
+
+    @Test
+    void rejectsPublicRegistrationOfReservedAdminName() throws Exception {
+        String reserved = """
+            {
+              "username": "admin",
+              "password": "secure-password"
+            }
+            """;
+
+        mockMvc.perform(post("/api/auth/register")
+                .contentType("application/json")
+                .content(reserved))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.success").value(false))
+            .andExpect(jsonPath("$.error").value("This username is reserved and cannot be registered"));
+
+        mockMvc.perform(post("/api/auth/login")
+                .contentType("application/json")
+                .content(reserved))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.success").value(false));
+    }
 }

@@ -26,6 +26,7 @@ public class RagDocumentRepository {
     private static final Logger log = LoggerFactory.getLogger(RagDocumentRepository.class);
 
     private final JdbcTemplate jdbcTemplate;
+    private final Object pgVectorDetectionLock = new Object();
     private volatile Boolean pgVectorAvailable;
 
     public RagDocumentRepository(JdbcTemplate jdbcTemplate) {
@@ -37,9 +38,19 @@ public class RagDocumentRepository {
         if (cached != null) {
             return cached;
         }
-        boolean detected = detectPgVector();
-        pgVectorAvailable = detected;
-        return detected;
+        synchronized (pgVectorDetectionLock) {
+            if (pgVectorAvailable != null) {
+                return pgVectorAvailable;
+            }
+            try {
+                boolean detected = detectPgVector();
+                pgVectorAvailable = detected;
+                return detected;
+            } catch (SQLException | RuntimeException exception) {
+                log.debug("pgvector detection failed transiently ({})", exception.getMessage());
+                return false;
+            }
+        }
     }
 
     public RagDocument insert(RagDocument document) {
@@ -348,7 +359,7 @@ public class RagDocumentRepository {
         );
     }
 
-    private boolean detectPgVector() {
+    private boolean detectPgVector() throws SQLException {
         DataSource dataSource = jdbcTemplate.getDataSource();
         if (dataSource == null) {
             return false;
@@ -358,20 +369,17 @@ public class RagDocumentRepository {
             if (product == null || !product.toLowerCase(Locale.ROOT).contains("postgres")) {
                 return false;
             }
-            Integer count = jdbcTemplate.queryForObject("""
-                    SELECT COUNT(*)
-                    FROM information_schema.columns
-                    WHERE table_name = 'rag_chunks' AND column_name = 'embedding'
-                    """,
-                Integer.class
-            );
-            boolean available = count != null && count > 0;
-            log.info("PostgreSQL pgvector support for rag_chunks: {}", available ? "enabled" : "not found");
-            return available;
-        } catch (SQLException | RuntimeException exception) {
-            log.debug("pgvector detection skipped ({})", exception.getMessage());
-            return false;
         }
+        Integer count = jdbcTemplate.queryForObject("""
+                SELECT COUNT(*)
+                FROM information_schema.columns
+                WHERE table_name = 'rag_chunks' AND column_name = 'embedding'
+                """,
+            Integer.class
+        );
+        boolean available = count != null && count > 0;
+        log.info("PostgreSQL pgvector support for rag_chunks: {}", available ? "enabled" : "not found");
+        return available;
     }
 
     static String toVectorLiteral(float[] vector) {

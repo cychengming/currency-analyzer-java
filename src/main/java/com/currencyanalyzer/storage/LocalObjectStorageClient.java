@@ -33,7 +33,7 @@ public class LocalObjectStorageClient implements ObjectStorageClient {
         try {
             Files.createDirectories(target.getParent());
             Files.write(target, content);
-            String generation = String.valueOf(Files.getLastModifiedTime(target).toMillis());
+            String generation = fileGeneration(target, content.length);
             return new StoredObject(providerName(), bucketName(), normalizeKey(objectKey), content.length, contentType, generation);
         } catch (IOException exception) {
             throw new StorageException("Unable to write file to local storage", exception);
@@ -80,7 +80,7 @@ public class LocalObjectStorageClient implements ObjectStorageClient {
                     }
                     try {
                         long size = Files.size(file);
-                        String generation = Files.getLastModifiedTime(file).toMillis() + "-" + size;
+                        String generation = fileGeneration(file, size);
                         items.add(new StoredObjectSummary(key, size, null, generation));
                     } catch (IOException exception) {
                         throw new StorageException("Unable to inspect file in local storage", exception);
@@ -99,6 +99,10 @@ public class LocalObjectStorageClient implements ObjectStorageClient {
             throw new IllegalArgumentException("Invalid storage key");
         }
         return target;
+    }
+
+    private static String fileGeneration(Path file, long size) throws IOException {
+        return Files.getLastModifiedTime(file).toMillis() + "-" + size;
     }
 
     private static String normalizeKey(String objectKey) {

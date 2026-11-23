@@ -19,6 +19,16 @@ public class TextDocumentParser implements DocumentParser {
     private static final Set<String> LOW_SIGNAL_HEADINGS = Set.of("标签", "tags", "tag");
     private static final int MIN_STANDALONE_SECTION_CHARS = 45;
     private static final int MAX_QUOTE_METADATA_STUB_CHARS = 140;
+    public static final int EMBEDDING_TOKEN_WINDOW = 256;
+    public static final int TITLE_TOKEN_BUDGET = 40;
+    public static final int HEADING_TOKEN_BUDGET = 24;
+    public static final int LEAD_TOKEN_BUDGET = 32;
+    public static final int SEPARATOR_TOKEN_BUDGET = 5;
+    public static final int MAX_CHUNK_TOKENS = EMBEDDING_TOKEN_WINDOW
+        - TITLE_TOKEN_BUDGET
+        - HEADING_TOKEN_BUDGET
+        - LEAD_TOKEN_BUDGET
+        - SEPARATOR_TOKEN_BUDGET;
 
     private final int chunkMaxChars;
     private final int chunkOverlapChars;
@@ -29,7 +39,8 @@ public class TextDocumentParser implements DocumentParser {
         @Value("${app.rag.chunk-overlap-chars:80}") int chunkOverlapChars,
         @Value("${app.rag.max-chunks-per-document:500}") int maxChunksPerDocument
     ) {
-        this.chunkMaxChars = Math.max(120, chunkMaxChars);
+        int requested = Math.max(1, chunkMaxChars);
+        this.chunkMaxChars = Math.min(requested, MAX_CHUNK_TOKENS);
         this.chunkOverlapChars = Math.max(0, Math.min(chunkOverlapChars, this.chunkMaxChars / 2));
         this.maxChunksPerDocument = Math.max(1, maxChunksPerDocument);
     }
@@ -128,23 +139,17 @@ public class TextDocumentParser implements DocumentParser {
 
     private List<ParsedChunk> parseCsv(String raw) {
         String normalized = raw.replace("\r\n", "\n").replace('\r', '\n');
-        String[] lines = normalized.split("\n");
-        String header = null;
-        List<String> rows = new ArrayList<>();
-        for (String line : lines) {
-            String trimmed = line.strip();
-            if (trimmed.isEmpty()) {
-                continue;
-            }
-            if (header == null) {
-                header = trimmed;
-            } else {
-                rows.add(trimmed);
+        List<String> records = new ArrayList<>();
+        for (String record : csvRecords(normalized)) {
+            if (!record.isBlank()) {
+                records.add(record.strip());
             }
         }
-        if (header == null) {
+        if (records.isEmpty()) {
             throw new IllegalArgumentException("Uploaded CSV file is empty");
         }
+        String header = records.getFirst();
+        List<String> rows = records.subList(1, records.size());
         if (rows.isEmpty()) {
             return List.of(new ParsedChunk(0, "CSV Header", header));
         }
@@ -155,7 +160,22 @@ public class TextDocumentParser implements DocumentParser {
         int currentRow = 0;
         for (String row : rows) {
             currentRow++;
-            if (current.length() > header.length() && current.length() + 1 + row.length() > chunkMaxChars) {
+            if (estimateTokens(row) > chunkMaxChars) {
+                if (current.length() > header.length() && chunks.size() < maxChunksPerDocument) {
+                    chunks.add(new ParsedChunk(chunks.size(), "Rows " + startRow + "-" + (currentRow - 1), current.toString()));
+                }
+                for (String piece : splitWithOverlap(row)) {
+                    if (chunks.size() >= maxChunksPerDocument) {
+                        return List.copyOf(chunks);
+                    }
+                    chunks.add(new ParsedChunk(chunks.size(), "Row " + currentRow, header + "\n" + piece));
+                }
+                current = new StringBuilder(header);
+                startRow = currentRow + 1;
+                continue;
+            }
+            int nextTokens = estimateTokens(current.toString()) + 1 + estimateTokens(row);
+            if (current.length() > header.length() && nextTokens > chunkMaxChars) {
                 int endRow = currentRow - 1;
                 chunks.add(new ParsedChunk(
                     chunks.size(),
@@ -178,6 +198,35 @@ public class TextDocumentParser implements DocumentParser {
             ));
         }
         return List.copyOf(chunks);
+    }
+
+    /**
+     * RFC 4180 records. Quoted fields keep commas, newlines, and doubled quotes.
+     * Each record is the original text, without the terminating newline.
+     */
+    static List<String> csvRecords(String text) {
+        List<String> records = new ArrayList<>();
+        boolean inQuotes = false;
+        int recordStart = 0;
+        for (int index = 0; index < text.length(); index++) {
+            char currentChar = text.charAt(index);
+            if (currentChar == '"') {
+                if (inQuotes && index + 1 < text.length() && text.charAt(index + 1) == '"') {
+                    index++;
+                } else {
+                    inQuotes = !inQuotes;
+                }
+                continue;
+            }
+            if (currentChar == '\n' && !inQuotes) {
+                records.add(text.substring(recordStart, index));
+                recordStart = index + 1;
+            }
+        }
+        if (recordStart < text.length() || inQuotes) {
+            records.add(text.substring(recordStart));
+        }
+        return records;
     }
 
     private static String firstMarkdownHeading(String body) {
@@ -291,7 +340,7 @@ public class TextDocumentParser implements DocumentParser {
 
     private List<String> splitWithOverlap(String text) {
         String cleaned = text.strip();
-        if (weightedLength(cleaned) <= chunkMaxChars) {
+        if (estimateTokens(cleaned) <= chunkMaxChars) {
             return List.of(cleaned);
         }
         List<String> result = new ArrayList<>();
@@ -345,6 +394,23 @@ public class TextDocumentParser implements DocumentParser {
         return maxEnd;
     }
 
+    static int estimateTokens(String text) {
+        return text == null || text.isEmpty() ? 0 : text.codePointCount(0, text.length());
+    }
+
+    static String takeTokens(String text, int budget) {
+        if (text == null || text.isEmpty() || budget <= 0) {
+            return "";
+        }
+        int count = 0;
+        int end = 0;
+        while (end < text.length() && count < budget) {
+            end += Character.charCount(text.codePointAt(end));
+            count++;
+        }
+        return text.substring(0, end);
+    }
+
     static int weightedLength(String text) {
         int total = 0;
         for (int index = 0; index < text.length(); index++) {
@@ -362,12 +428,12 @@ public class TextDocumentParser implements DocumentParser {
         int index = start;
         int len = text.length();
         while (index < len) {
-            int weight = charWeight(text.charAt(index));
-            if (used + weight > budget && index > start) {
+            int chars = Character.charCount(text.codePointAt(index));
+            if (used + 1 > budget && index > start) {
                 break;
             }
-            used += weight;
-            index++;
+            used++;
+            index += chars;
         }
         return index;
     }
@@ -379,8 +445,8 @@ public class TextDocumentParser implements DocumentParser {
         int used = 0;
         int index = end;
         while (index > minStart + 1 && used < overlapBudget) {
-            index--;
-            used += charWeight(text.charAt(index));
+            index = Character.offsetByCodePoints(text, index, -1);
+            used++;
         }
         return Math.max(minStart + 1, index);
     }

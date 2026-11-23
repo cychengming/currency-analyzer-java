@@ -1,7 +1,6 @@
 package com.currencyanalyzer.ai.rag;
 
-import com.currencyanalyzer.auth.DatabaseUserDetailsService;
-import org.springframework.beans.factory.annotation.Value;
+import com.currencyanalyzer.auth.KnowledgeAdminService;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.ContentDisposition;
 import org.springframework.http.HttpHeaders;
@@ -22,10 +21,8 @@ import org.springframework.web.multipart.MultipartFile;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
-import java.util.Set;
 import java.util.UUID;
 
 @RestController
@@ -35,16 +32,16 @@ public class RagDocumentController {
 
     private final RagDocumentService documentService;
     private final RagChunkRetriever chunkRetriever;
-    private final Set<String> adminUsers;
+    private final KnowledgeAdminService knowledgeAdminService;
 
     public RagDocumentController(
         RagDocumentService documentService,
         RagChunkRetriever chunkRetriever,
-        @Value("${app.rag.admin-users:}") String adminUsersCsv
+        KnowledgeAdminService knowledgeAdminService
     ) {
         this.documentService = documentService;
         this.chunkRetriever = chunkRetriever;
-        this.adminUsers = DatabaseUserDetailsService.parseAdminUsers(adminUsersCsv);
+        this.knowledgeAdminService = knowledgeAdminService;
     }
 
     @GetMapping("/info")
@@ -168,7 +165,6 @@ public class RagDocumentController {
         if (hasAdminRole) {
             return true;
         }
-        String name = authentication.getName();
-        return name != null && adminUsers.contains(name.trim().toLowerCase(Locale.ROOT));
+        return knowledgeAdminService.isAdminUsername(authentication.getName());
     }
 }

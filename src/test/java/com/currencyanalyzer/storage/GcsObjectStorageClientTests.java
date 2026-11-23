@@ -134,9 +134,11 @@ class GcsObjectStorageClientTests {
         assertTrue(local.get("nope.md").isEmpty());
         assertFalse(local.delete("nope.md"));
 
-        local.put("a/one.md", "one".getBytes(StandardCharsets.UTF_8), "text/markdown");
+        byte[] one = "one".getBytes(StandardCharsets.UTF_8);
+        ObjectStorageClient.StoredObject stored = local.put("a/one.md", one, "text/markdown");
         local.put("b/two.md", "two".getBytes(StandardCharsets.UTF_8), "text/markdown");
         assertEquals(1, local.list("a").size());
+        assertEquals(stored.generation(), local.list("a/").getFirst().generation());
         assertEquals(2, local.list("").size());
 
         assertThrows(IllegalArgumentException.class, () -> local.get("../escape.md"));

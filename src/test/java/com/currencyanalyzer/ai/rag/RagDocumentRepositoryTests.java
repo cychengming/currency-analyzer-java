@@ -100,6 +100,29 @@ class RagDocumentRepositoryTests {
     }
 
     @Test
+    void retriesPgVectorDetectionAfterATransientFailure() throws Exception {
+        JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
+        DataSource dataSource = mock(DataSource.class);
+        Connection connection = mock(Connection.class);
+        DatabaseMetaData metaData = mock(DatabaseMetaData.class);
+
+        when(jdbcTemplate.getDataSource()).thenReturn(dataSource);
+        when(dataSource.getConnection()).thenReturn(connection);
+        when(connection.getMetaData()).thenReturn(metaData);
+        when(metaData.getDatabaseProductName()).thenReturn("PostgreSQL");
+        when(jdbcTemplate.queryForObject(contains("information_schema.columns"), eq(Integer.class)))
+            .thenThrow(new RuntimeException("connection reset"))
+            .thenReturn(1);
+
+        RagDocumentRepository repository = new RagDocumentRepository(jdbcTemplate);
+        assertFalse(repository.isPgVectorAvailable());
+        assertTrue(repository.isPgVectorAvailable());
+        assertTrue(repository.isPgVectorAvailable());
+        verify(jdbcTemplate, org.mockito.Mockito.times(2))
+            .queryForObject(contains("information_schema.columns"), eq(Integer.class));
+    }
+
+    @Test
     void returnsFalseWhenDataSourceIsMissingOrThrows() {
         JdbcTemplate noDs = mock(JdbcTemplate.class);
         when(noDs.getDataSource()).thenReturn(null);

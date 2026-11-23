@@ -12,6 +12,7 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Clock;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.HexFormat;
@@ -100,6 +101,7 @@ public class RagDocumentService {
 
     public RagSyncSummary syncFromStorage(String requestedPrefix, String username) {
         String scopedPrefix = resolveScopedPrefix(requestedPrefix);
+        Instant listedAt = clock.instant();
         List<ObjectStorageClient.StoredObjectSummary> objects = storageClient.list(scopedPrefix);
 
         int queued = 0;
@@ -110,87 +112,92 @@ public class RagDocumentService {
 
         for (ObjectStorageClient.StoredObjectSummary summary : objects) {
             seenKeys.add(summary.key());
-            String filename = extractFilename(summary.key());
-            if (!documentParser.supports(filename) || summary.sizeBytes() <= 0 || summary.sizeBytes() > maxFileSizeBytes) {
-                ignored++;
-                continue;
-            }
-            Optional<RagDocument> existing = repository.findByStorage(storageClient.providerName(), summary.key());
-            if (existing.isPresent()
-                && RagDocument.STATUS_READY.equals(existing.get().status())
-                && summary.generation() != null
-                && summary.generation().equals(existing.get().storageGeneration())) {
-                skipped++;
-                continue;
-            }
-
-            Optional<byte[]> bytesOpt = storageClient.get(summary.key());
-            if (bytesOpt.isEmpty()) {
-                ignored++;
-                continue;
-            }
-            byte[] rawBytes = bytesOpt.get();
-            String sha256 = sha256Hex(rawBytes);
-            if (existing.isPresent()
-                && RagDocument.STATUS_READY.equals(existing.get().status())
-                && sha256.equals(existing.get().sha256())) {
-                skipped++;
-                continue;
-            }
-
-            DocumentParser.ParsedDocument parsed;
             try {
-                parsed = documentParser.parse(filename, rawBytes, null);
-            } catch (IllegalArgumentException exception) {
-                log.debug("Skipping unsupported/invalid storage object {}: {}", summary.key(), exception.getMessage());
+                String filename = extractFilename(summary.key());
+                if (!documentParser.supports(filename) || summary.sizeBytes() <= 0 || summary.sizeBytes() > maxFileSizeBytes) {
+                    ignored++;
+                    continue;
+                }
+                Optional<RagDocument> existing = repository.findByStorage(storageClient.providerName(), summary.key());
+                if (existing.isPresent()
+                    && RagDocument.STATUS_READY.equals(existing.get().status())
+                    && summary.generation() != null
+                    && summary.generation().equals(existing.get().storageGeneration())) {
+                    skipped++;
+                    continue;
+                }
+
+                Optional<byte[]> bytesOpt = storageClient.get(summary.key());
+                if (bytesOpt.isEmpty()) {
+                    ignored++;
+                    continue;
+                }
+                byte[] rawBytes = bytesOpt.get();
+                String sha256 = sha256Hex(rawBytes);
+                if (existing.isPresent()
+                    && RagDocument.STATUS_READY.equals(existing.get().status())
+                    && sha256.equals(existing.get().sha256())) {
+                    skipped++;
+                    continue;
+                }
+
+                DocumentParser.ParsedDocument parsed;
+                try {
+                    parsed = documentParser.parse(filename, rawBytes, null);
+                } catch (IllegalArgumentException exception) {
+                    log.debug("Skipping unsupported/invalid storage object {}: {}", summary.key(), exception.getMessage());
+                    ignored++;
+                    continue;
+                }
+
+                String contentType = documentParser.inferContentType(filename);
+                Instant now = clock.instant();
+                UUID documentId;
+                if (existing.isPresent()) {
+                    documentId = existing.get().id();
+                    repository.updateForReindex(
+                        documentId,
+                        filename,
+                        parsed.title(),
+                        contentType,
+                        rawBytes.length,
+                        sha256,
+                        summary.generation(),
+                        now
+                    );
+                } else {
+                    documentId = UUID.randomUUID();
+                    RagDocument created = new RagDocument(
+                        documentId,
+                        RagDocument.SOURCE_UPLOAD,
+                        filename,
+                        parsed.title(),
+                        contentType,
+                        rawBytes.length,
+                        sha256,
+                        storageClient.providerName(),
+                        storageClient.bucketName(),
+                        summary.key(),
+                        summary.generation(),
+                        RagDocument.STATUS_PENDING,
+                        0,
+                        null,
+                        actor,
+                        now,
+                        now
+                    );
+                    repository.insert(created);
+                }
+
+                ingestionService.enqueue(documentId, sha256, filename, null, rawBytes);
+                queued++;
+            } catch (RuntimeException exception) {
+                log.warn("Skipping storage object {} during sync: {}", summary.key(), exception.getMessage());
                 ignored++;
-                continue;
             }
-
-            String contentType = documentParser.inferContentType(filename);
-            Instant now = clock.instant();
-            UUID documentId;
-            if (existing.isPresent()) {
-                documentId = existing.get().id();
-                repository.updateForReindex(
-                    documentId,
-                    filename,
-                    parsed.title(),
-                    contentType,
-                    rawBytes.length,
-                    sha256,
-                    summary.generation(),
-                    now
-                );
-            } else {
-                documentId = UUID.randomUUID();
-                RagDocument created = new RagDocument(
-                    documentId,
-                    RagDocument.SOURCE_UPLOAD,
-                    filename,
-                    parsed.title(),
-                    contentType,
-                    rawBytes.length,
-                    sha256,
-                    storageClient.providerName(),
-                    storageClient.bucketName(),
-                    summary.key(),
-                    summary.generation(),
-                    RagDocument.STATUS_PENDING,
-                    0,
-                    null,
-                    actor,
-                    now,
-                    now
-                );
-                repository.insert(created);
-            }
-
-            ingestionService.enqueue(documentId, sha256, filename, null, rawBytes);
-            queued++;
         }
 
-        int deleted = pruneDeletedUploads(scopedPrefix, seenKeys);
+        int deleted = objects.isEmpty() ? 0 : pruneDeletedUploads(scopedPrefix, seenKeys, listedAt);
 
         return new RagSyncSummary(
             storageClient.providerName(),
@@ -303,9 +310,31 @@ public class RagDocumentService {
         return candidate;
     }
 
-    private int pruneDeletedUploads(String scopedPrefix, Set<String> seenKeys) {
-        int deleted = 0;
+    private int pruneDeletedUploads(String scopedPrefix, Set<String> seenKeys, Instant listedAt) {
+        if (seenKeys.isEmpty()) {
+            return 0;
+        }
+        String bucket = storageClient.bucketName();
+        List<RagDocument> indexedBeforeList = new ArrayList<>();
+        boolean listingMatchesIndex = false;
         for (RagDocument existing : repository.findUploadsByPrefix(storageClient.providerName(), scopedPrefix)) {
+            if (!sameStorageBucket(existing, bucket)) {
+                continue;
+            }
+            if (existing.createdAt() != null && !existing.createdAt().isBefore(listedAt)) {
+                continue;
+            }
+            indexedBeforeList.add(existing);
+            if (seenKeys.contains(existing.storageKey())) {
+                listingMatchesIndex = true;
+            }
+        }
+        if (!listingMatchesIndex) {
+            log.info("Skipping RAG prune for prefix {}: listing does not match indexed uploads", scopedPrefix);
+            return 0;
+        }
+        int deleted = 0;
+        for (RagDocument existing : indexedBeforeList) {
             if (!seenKeys.contains(existing.storageKey())) {
                 ingestionService.cancelPending(existing.id());
                 if (repository.deleteById(existing.id())) {
@@ -315,6 +344,14 @@ public class RagDocumentService {
             }
         }
         return deleted;
+    }
+
+    private static boolean sameStorageBucket(RagDocument document, String bucket) {
+        String stored = document.storageBucket();
+        if (stored == null || stored.isBlank() || bucket == null || bucket.isBlank()) {
+            return true;
+        }
+        return stored.equals(bucket);
     }
 
     private Optional<byte[]> loadRawBytes(RagDocument document) {

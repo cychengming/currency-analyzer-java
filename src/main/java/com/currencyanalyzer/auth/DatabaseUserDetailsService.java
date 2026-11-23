@@ -1,7 +1,6 @@
 package com.currencyanalyzer.auth;
 
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.userdetails.User;
@@ -20,19 +19,20 @@ import java.util.stream.Collectors;
 public class DatabaseUserDetailsService implements UserDetailsService {
 
     private final UserRepository userRepository;
-    private final Set<String> adminUsers;
+    private final KnowledgeAdminService knowledgeAdminService;
 
     public DatabaseUserDetailsService(UserRepository userRepository) {
         this(userRepository, "");
     }
 
+    public DatabaseUserDetailsService(UserRepository userRepository, String adminUsersCsv) {
+        this(userRepository, new KnowledgeAdminService(userRepository, adminUsersCsv));
+    }
+
     @Autowired
-    public DatabaseUserDetailsService(
-        UserRepository userRepository,
-        @Value("${app.rag.admin-users:}") String adminUsersCsv
-    ) {
+    public DatabaseUserDetailsService(UserRepository userRepository, KnowledgeAdminService knowledgeAdminService) {
         this.userRepository = userRepository;
-        this.adminUsers = parseAdminUsers(adminUsersCsv);
+        this.knowledgeAdminService = knowledgeAdminService;
     }
 
     @Override
@@ -42,7 +42,7 @@ public class DatabaseUserDetailsService implements UserDetailsService {
 
         List<GrantedAuthority> authorities = new ArrayList<>();
         authorities.add(new SimpleGrantedAuthority("ROLE_USER"));
-        if (adminUsers.contains(account.username().toLowerCase(Locale.ROOT))) {
+        if (knowledgeAdminService.isAdminUsername(account.username())) {
             authorities.add(new SimpleGrantedAuthority("ROLE_ADMIN"));
         }
 

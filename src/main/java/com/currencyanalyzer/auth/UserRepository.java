@@ -17,6 +17,17 @@ public class UserRepository {
         this.clock = clock;
     }
 
+    public Optional<UserAccount> findOldest() {
+        return jdbcClient.sql("""
+                SELECT id, username, password, created_at
+                FROM users
+                ORDER BY created_at ASC, id ASC
+                LIMIT 1
+                """)
+            .query((rs, rowNum) -> mapAccount(rs))
+            .optional();
+    }
+
     public Optional<UserAccount> findByUsername(String username) {
         return jdbcClient.sql("""
                 SELECT id, username, password, created_at
@@ -24,15 +35,18 @@ public class UserRepository {
                 WHERE username = :username
                 """)
             .param("username", username)
-            .query((rs, rowNum) -> new UserAccount(
-                rs.getLong("id"),
-                rs.getString("username"),
-                rs.getString("password"),
-                rs.getObject("created_at", java.time.OffsetDateTime.class) == null
-                    ? null
-                    : rs.getObject("created_at", java.time.OffsetDateTime.class).toInstant()
-            ))
+            .query((rs, rowNum) -> mapAccount(rs))
             .optional();
+    }
+
+    private static UserAccount mapAccount(java.sql.ResultSet rs) throws java.sql.SQLException {
+        java.time.OffsetDateTime createdAt = rs.getObject("created_at", java.time.OffsetDateTime.class);
+        return new UserAccount(
+            rs.getLong("id"),
+            rs.getString("username"),
+            rs.getString("password"),
+            createdAt == null ? null : createdAt.toInstant()
+        );
     }
 
     public boolean existsByUsername(String username) {

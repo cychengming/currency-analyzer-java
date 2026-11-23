@@ -24,7 +24,6 @@ public class RagIngestionService {
     private static final Logger log = LoggerFactory.getLogger(RagIngestionService.class);
     private static final int EMBEDDING_BATCH_SIZE = 16;
     private static final int INGESTION_CONCURRENCY = 2;
-    private static final int MAX_LEAD_WEIGHTED_UNITS = 64;
 
     private final RagDocumentRepository repository;
     private final DocumentParser documentParser;
@@ -176,7 +175,7 @@ public class RagIngestionService {
                 List<String> inputs = new ArrayList<>(end - start);
                 for (int index = start; index < end; index++) {
                     DocumentParser.ParsedChunk chunk = chunks.get(index);
-                    inputs.add(embeddingInput(documentTitle, index == 0 ? "" : documentLead, chunk));
+                    inputs.add(embeddingInput(documentTitle, documentLead, chunk));
                 }
                 List<float[]> batch = embeddingModel.embed(inputs);
                 results.addAll(batch);
@@ -201,37 +200,43 @@ public class RagIngestionService {
             return "";
         }
         String singleLine = first.replaceAll("\\s+", " ").strip();
-        int used = 0;
-        int end = 0;
-        while (end < singleLine.length()) {
-            int weight = TextDocumentParser.charWeight(singleLine.charAt(end));
-            if (used + weight > MAX_LEAD_WEIGHTED_UNITS && end > 0) {
-                break;
-            }
-            used += weight;
-            end++;
-        }
-        return singleLine.substring(0, end).strip();
+        return TextDocumentParser.takeTokens(singleLine, TextDocumentParser.LEAD_TOKEN_BUDGET).strip();
     }
 
-    private static String embeddingInput(String documentTitle, String documentLead, DocumentParser.ParsedChunk chunk) {
-        StringBuilder builder = new StringBuilder();
-        if (documentTitle != null && !documentTitle.isBlank()) {
-            builder.append(documentTitle);
+    static String embeddingInput(String documentTitle, String documentLead, DocumentParser.ParsedChunk chunk) {
+        String title = TextDocumentParser.takeTokens(
+            documentTitle == null ? "" : documentTitle.strip(),
+            TextDocumentParser.TITLE_TOKEN_BUDGET
+        );
+        String heading = TextDocumentParser.takeTokens(
+            chunk.heading() == null ? "" : chunk.heading().strip(),
+            TextDocumentParser.HEADING_TOKEN_BUDGET
+        );
+        if (heading.equals(title)) {
+            heading = "";
         }
-        if (chunk.heading() != null && !chunk.heading().isBlank() && !chunk.heading().equals(documentTitle)) {
+        String lead = TextDocumentParser.takeTokens(
+            documentLead == null ? "" : documentLead.strip(),
+            TextDocumentParser.LEAD_TOKEN_BUDGET
+        );
+        String content = chunk.content() == null ? "" : chunk.content();
+        StringBuilder builder = new StringBuilder();
+        if (!title.isEmpty()) {
+            builder.append(title);
+        }
+        if (!heading.isEmpty()) {
             if (!builder.isEmpty()) {
                 builder.append(" - ");
             }
-            builder.append(chunk.heading());
+            builder.append(heading);
         }
-        if (documentLead != null && !documentLead.isBlank()) {
-            builder.append('\n').append(documentLead);
+        if (!lead.isEmpty()) {
+            builder.append('\n').append(lead);
         }
         if (!builder.isEmpty()) {
             builder.append('\n');
         }
-        builder.append(chunk.content());
+        builder.append(content);
         return builder.toString();
     }
 

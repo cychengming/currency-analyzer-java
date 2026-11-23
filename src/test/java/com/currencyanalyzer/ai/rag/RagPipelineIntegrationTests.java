@@ -95,27 +95,34 @@ class RagPipelineIntegrationTests {
         byte[] v1Bytes = "# Soros Reflexivity\n\nFeedback loops between market prices and fundamentals create booms and busts.\n"
             .getBytes(StandardCharsets.UTF_8);
         storageClient.put("knowledge/concepts/soros-reflexivity.md", v1Bytes, "text/markdown");
+        storageClient.put("knowledge/concepts/keep.md", "# Keep\n\nThis note stays indexed.\n".getBytes(StandardCharsets.UTF_8), "text/markdown");
         storageClient.put("knowledge/concepts/ignored.png", new byte[] {1, 2, 3, 4}, "image/png");
         storageClient.put("knowledge-other/outside.md", "# Outside\nMust never be scanned.\n".getBytes(StandardCharsets.UTF_8), "text/markdown");
 
         // Blank prefix stays inside default 'knowledge/' and never matches 'knowledge-other/'
         RagSyncSummary first = documentService.syncFromStorage("", "admin");
         assertEquals("knowledge/", first.prefix());
-        assertEquals(2, first.scanned());
-        assertEquals(1, first.queued());
+        assertEquals(3, first.scanned());
+        assertEquals(2, first.queued());
         assertEquals(0, first.skipped());
         assertEquals(1, first.ignored());
         assertEquals(0, first.deleted());
 
         List<RagDocument> docs = documentService.list();
-        assertEquals(1, docs.size());
-        RagDocument readyV1 = awaitStatus(docs.getFirst().id(), RagDocument.STATUS_READY);
+        assertEquals(2, docs.size());
+        for (RagDocument doc : docs) {
+            awaitStatus(doc.id(), RagDocument.STATUS_READY);
+        }
+        RagDocument readyV1 = docs.stream()
+            .filter(doc -> "soros-reflexivity.md".equals(doc.filename()))
+            .findFirst()
+            .orElseThrow();
         String oldSha = readyV1.sha256();
 
         RagSyncSummary second = documentService.syncFromStorage("knowledge", "admin");
-        assertEquals(2, second.scanned());
+        assertEquals(3, second.scanned());
         assertEquals(0, second.queued());
-        assertEquals(1, second.skipped());
+        assertEquals(2, second.skipped());
         assertEquals(1, second.ignored());
         assertEquals(0, second.deleted());
 
@@ -133,12 +140,20 @@ class RagPipelineIntegrationTests {
         assertFalse(hits.isEmpty());
         assertTrue(hits.getFirst().content().contains("version two"));
 
-        // Deleting object from bucket prunes stale DB row & chunks on next sync
+        // Deleting one indexed object prunes that row when another indexed object is still listed.
         storageClient.delete("knowledge/concepts/soros-reflexivity.md");
         RagSyncSummary pruneSync = documentService.syncFromStorage("knowledge", "admin");
         assertEquals(1, pruneSync.deleted());
-        assertTrue(documentService.list().isEmpty());
+        assertEquals(1, documentService.list().size());
         assertTrue(chunkRetriever.search("reflexivity version two", 3).isEmpty());
+
+        // An empty listing must not drop the remaining indexed row.
+        storageClient.delete("knowledge/concepts/keep.md");
+        storageClient.delete("knowledge/concepts/ignored.png");
+        RagSyncSummary emptySync = documentService.syncFromStorage("knowledge", "admin");
+        assertEquals(0, emptySync.scanned());
+        assertEquals(0, emptySync.deleted());
+        assertEquals(1, documentService.list().size());
     }
 
     @Test
