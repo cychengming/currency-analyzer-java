@@ -18,7 +18,7 @@ public class AiUsageRepository {
     }
 
     public UsageTotals totalsSince(String username, Instant since) {
-        UsageTotals totals = jdbcTemplate.queryForObject("""
+        return jdbcTemplate.queryForObject("""
                 SELECT COALESCE(SUM(request_count), 0),
                        COALESCE(SUM(COALESCE(input_tokens, 0) + COALESCE(output_tokens, 0)), 0)
                 FROM ai_usage
@@ -28,7 +28,6 @@ public class AiUsageRepository {
             username,
             OffsetDateTime.ofInstant(since, ZoneOffset.UTC)
         );
-        return totals == null ? new UsageTotals(0, 0) : totals;
     }
 
     public void record(

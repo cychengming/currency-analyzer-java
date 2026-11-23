@@ -223,8 +223,8 @@ public class SpringAiChatRunner {
             return null;
         }
         Usage usage = chunk.getMetadata().getUsage();
-        int input = usage.getPromptTokens() == null ? 0 : usage.getPromptTokens();
-        int output = usage.getCompletionTokens() == null ? 0 : usage.getCompletionTokens();
+        int input = usage.getPromptTokens();
+        int output = usage.getCompletionTokens();
         if (input <= 0 && output <= 0) {
             return null;
         }

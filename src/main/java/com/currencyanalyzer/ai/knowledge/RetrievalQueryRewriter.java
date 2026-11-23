@@ -17,7 +17,7 @@ public final class RetrievalQueryRewriter {
 
     private static final Pattern ABOUT = Pattern.compile("(?i)^(what|how) about\\b");
     private static final Pattern ANAPHORA = Pattern.compile(
-        "(?i)\\b(he|she|his|her|their|they|him|them|that|this|those|these|it)\\b|[他她它其]"
+        "(?iu)\\b(he|she|his|her|their|they|him|them|that|this|those|these|it)\\b|[他她它其]"
     );
 
     private RetrievalQueryRewriter() {
