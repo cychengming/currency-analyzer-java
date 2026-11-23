@@ -1,0 +1,131 @@
+name: Deploy to Cloud Run
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+    inputs:
+      prebake_embedding_model:
+        description: "Pre-bake MiniLM ONNX model into the Docker image"
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-cloud-run-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "25"
+          cache: maven
+      - name: Verify
+        run: ./mvnw -B -ntp verify
+
+  build-and-deploy:
+    needs: verify
+    if: ${{ github.event_name == 'workflow_dispatch' || vars.GCP_CLOUD_RUN_DEPLOY_ENABLED == 'true' }}
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID || 'project-3806d7a4-0bd7-416f-8c4' }}
+      GCP_REGION: ${{ vars.GCP_REGION || 'us-west1' }}
+      GCP_STORAGE_BUCKET: ${{ vars.GCP_STORAGE_BUCKET || 'currency-analyze' }}
+      AR_REPO: currency-analyzer
+      CLOUD_SQL_CONNECTION_NAME: ${{ vars.CLOUD_SQL_CONNECTION_NAME || 'project-3806d7a4-0bd7-416f-8c4:us-west1:currency-analyzer' }}
+      SERVICE_NAME: currency-analyzer-java
+      PREBAKE_MODEL: ${{ inputs.prebake_embedding_model == false && 'false' || 'true' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: auth
+        name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@c200f3691d83b41bf9bbd8638997a462592937ed # v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_DEPLOY_SERVICE_ACCOUNT }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@e427ad8a34f8676edf47cf7d7925499adf3eb74f # v2
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker "${GCP_REGION}-docker.pkg.dev" --quiet
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Build and push image
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.AR_REPO }}/app:${{ github.sha }}
+            ${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.AR_REPO }}/app:latest
+          build-args: |
+            PREBAKE_EMBEDDING_MODEL=${{ env.PREBAKE_MODEL }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - id: deploy
+        name: Deploy to Cloud Run
+        uses: google-github-actions/deploy-cloudrun@251330ba9a8a34bfbc1622895f42e1d53fd14522 # v2
+        with:
+          service: ${{ env.SERVICE_NAME }}
+          region: ${{ env.GCP_REGION }}
+          image: ${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.AR_REPO }}/app:${{ github.sha }}
+          flags: >-
+            --service-account=currency-analyzer-run@${{ env.GCP_PROJECT_ID }}.iam.gserviceaccount.com
+            --add-cloudsql-instances=${{ env.CLOUD_SQL_CONNECTION_NAME }}
+            --cpu=2
+            --memory=2Gi
+            --timeout=300
+            --min-instances=0
+            --max-instances=1
+            --no-cpu-throttling
+            --allow-unauthenticated
+          secrets: |
+            DATABASE_PASSWORD=currency-db-password:latest
+            DEEPSEEK_API_KEY=currency-deepseek-api-key:latest
+          env_vars: |
+            DATABASE_URL=jdbc:postgresql:///currency_analyzer?cloudSqlInstance=${{ env.CLOUD_SQL_CONNECTION_NAME }}&socketFactory=com.google.cloud.sql.postgres.SocketFactory
+            DATABASE_USERNAME=currency
+            DATABASE_POOL_SIZE=5
+            SESSION_COOKIE_SECURE=true
+            STORAGE_PROVIDER=gcs
+            GCP_PROJECT_ID=${{ env.GCP_PROJECT_ID }}
+            GCP_STORAGE_BUCKET=${{ env.GCP_STORAGE_BUCKET }}
+            GCP_STORAGE_PREFIX=knowledge
+            RAG_ADMIN_USERS=${{ vars.RAG_ADMIN_USERS || '' }}
+            RAG_SYNC_ON_STARTUP=true
+            AI_ASSISTANT_ENABLED=true
+            AI_DAILY_REQUEST_LIMIT=100
+            AI_DAILY_TOKEN_LIMIT=200000
+            AI_EMBEDDING_MODEL_URI=file:/app/models/embeddings/model_quantized.onnx
+            AI_EMBEDDING_TOKENIZER_URI=file:/app/models/embeddings/tokenizer.json
+
+      - name: Verify readiness probe
+        env:
+          SERVICE_URL: ${{ steps.deploy.outputs.url }}
+        run: |
+          for attempt in $(seq 1 12); do
+            if curl -fsS "${SERVICE_URL}/actuator/health/readiness"; then
+              echo ""
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "Readiness check failed for ${SERVICE_URL}" >&2
+          exit 1

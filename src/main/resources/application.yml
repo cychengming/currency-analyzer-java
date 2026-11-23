@@ -29,6 +29,7 @@ spring:
 
 server:
   port: ${PORT:5000}
+  forward-headers-strategy: framework
   shutdown: graceful
   servlet:
     session:
