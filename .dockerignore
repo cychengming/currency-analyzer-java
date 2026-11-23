@@ -1,0 +1,11 @@
+.git
+.github
+.agents
+.idea
+.vscode
+target
+docs
+*.md
+compose.yaml
+Dockerfile
+.dockerignore
