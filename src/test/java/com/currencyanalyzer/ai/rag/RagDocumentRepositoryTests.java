@@ -2,6 +2,7 @@ package com.currencyanalyzer.ai.rag;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.PreparedStatementCreator;
 import org.springframework.jdbc.core.RowMapper;
 
 import javax.sql.DataSource;
@@ -157,9 +158,8 @@ class RagDocumentRepositoryTests {
             any(Object[].class)
         )).thenReturn(List.of(chunk));
         when(jdbcTemplate.query(
-            contains("AND d.id IN (?)"),
-            any(RowMapper.class),
-            any(Object[].class)
+            any(PreparedStatementCreator.class),
+            any(RowMapper.class)
         )).thenReturn(List.of(chunk));
 
         RagDocumentRepository repository = new RagDocumentRepository(jdbcTemplate);

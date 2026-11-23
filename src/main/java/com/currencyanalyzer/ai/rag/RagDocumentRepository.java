@@ -3,6 +3,8 @@ package com.currencyanalyzer.ai.rag;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
+import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -13,10 +15,8 @@ import java.sql.SQLException;
 import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
-import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
-import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
@@ -28,8 +28,51 @@ public class RagDocumentRepository {
 
     private static final Logger log = LoggerFactory.getLogger(RagDocumentRepository.class);
     private static final int MAX_SQL_LEXICAL_TERMS = 6;
+    private static final String FIND_READY_BY_DOCUMENT_IDS_SQL = """
+            SELECT d.id AS document_id,
+                   d.title AS document_title,
+                   d.filename AS filename,
+                   d.source AS source,
+                   c.chunk_index AS chunk_index,
+                   c.heading AS heading,
+                   c.content AS content
+            FROM rag_chunks c
+            JOIN rag_documents d ON d.id = c.document_id
+            WHERE d.status = 'READY'
+              AND d.id IN (:documentIds)
+            ORDER BY d.created_at DESC, c.chunk_index ASC
+            """;
+    private static final String SEARCH_LEXICAL_PG_TRGM_SQL = """
+            SELECT d.id AS document_id,
+                   d.title AS document_title,
+                   d.filename AS filename,
+                   d.source AS source,
+                   c.chunk_index AS chunk_index,
+                   c.heading AS heading,
+                   c.content AS content
+            FROM rag_chunks c
+            JOIN rag_documents d ON d.id = c.document_id
+            WHERE d.status = 'READY'
+              AND (
+                  word_similarity(?, c.content) > 0.15
+                  OR word_similarity(?, COALESCE(c.heading, '')) > 0.20
+                  OR word_similarity(?, d.title) > 0.20
+                  OR c.content ILIKE ANY (ARRAY[?, ?, ?, ?, ?, ?, ?]::text[])
+                  OR COALESCE(c.heading, '') ILIKE ANY (ARRAY[?, ?, ?, ?, ?, ?, ?]::text[])
+                  OR d.title ILIKE ANY (ARRAY[?, ?, ?, ?, ?, ?, ?]::text[])
+              )
+            ORDER BY GREATEST(
+                word_similarity(?, d.title),
+                word_similarity(?, COALESCE(c.heading, '')),
+                word_similarity(?, c.content)
+            ) DESC,
+            d.created_at DESC,
+            c.chunk_index ASC
+            LIMIT ?
+            """;
 
     private final JdbcTemplate jdbcTemplate;
+    private final NamedParameterJdbcTemplate namedParameterJdbcTemplate;
     private final Object pgVectorDetectionLock = new Object();
     private final Object pgTrgmDetectionLock = new Object();
     private volatile Boolean pgVectorAvailable;
@@ -37,6 +80,7 @@ public class RagDocumentRepository {
 
     public RagDocumentRepository(JdbcTemplate jdbcTemplate) {
         this.jdbcTemplate = jdbcTemplate;
+        this.namedParameterJdbcTemplate = new NamedParameterJdbcTemplate(jdbcTemplate);
     }
 
     public boolean isPgVectorAvailable() {
@@ -385,22 +429,12 @@ public class RagDocumentRepository {
         if (distinctIds.isEmpty()) {
             return List.of();
         }
-        String placeholders = String.join(", ", Collections.nCopies(distinctIds.size(), "?"));
-        String sql = """
-                SELECT d.id AS document_id,
-                       d.title AS document_title,
-                       d.filename AS filename,
-                       d.source AS source,
-                       c.chunk_index AS chunk_index,
-                       c.heading AS heading,
-                       c.content AS content
-                FROM rag_chunks c
-                JOIN rag_documents d ON d.id = c.document_id
-                WHERE d.status = 'READY'
-                  AND d.id IN (%s)
-                ORDER BY d.created_at DESC, c.chunk_index ASC
-                """.formatted(placeholders);
-        return jdbcTemplate.query(sql, (rs, rowNum) -> mapReadyChunk(rs), distinctIds.toArray());
+        MapSqlParameterSource params = new MapSqlParameterSource("documentIds", distinctIds);
+        return namedParameterJdbcTemplate.query(
+            FIND_READY_BY_DOCUMENT_IDS_SQL,
+            params,
+            (rs, rowNum) -> mapReadyChunk(rs)
+        );
     }
 
     public List<ReadyChunk> searchLexicalCandidates(String normalizedQuery, List<String> terms, int limit) {
@@ -410,72 +444,33 @@ public class RagDocumentRepository {
         if (!isPgTrgmAvailable()) {
             return findAllReadyChunks();
         }
-        List<String> boundedTerms = new ArrayList<>();
+        String[] patterns = new String[MAX_SQL_LEXICAL_TERMS + 1];
+        patterns[0] = toLikePattern(normalizedQuery);
+        int slot = 1;
         if (terms != null) {
             for (String term : terms) {
-                if (term != null && !term.isBlank() && boundedTerms.size() < MAX_SQL_LEXICAL_TERMS) {
-                    boundedTerms.add(term.trim());
+                if (term != null && !term.isBlank() && slot < patterns.length) {
+                    patterns[slot++] = toLikePattern(term.trim());
                 }
             }
         }
-        StringBuilder sql = new StringBuilder("""
-                SELECT d.id AS document_id,
-                       d.title AS document_title,
-                       d.filename AS filename,
-                       d.source AS source,
-                       c.chunk_index AS chunk_index,
-                       c.heading AS heading,
-                       c.content AS content
-                FROM rag_chunks c
-                JOIN rag_documents d ON d.id = c.document_id
-                WHERE d.status = 'READY'
-                  AND (
-                      word_similarity(?, c.content) > 0.15
-                      OR word_similarity(?, COALESCE(c.heading, '')) > 0.20
-                      OR word_similarity(?, d.title) > 0.20
-                      OR c.content ILIKE ? ESCAPE '\\'
-                      OR COALESCE(c.heading, '') ILIKE ? ESCAPE '\\'
-                      OR d.title ILIKE ? ESCAPE '\\'
-                """);
-        List<Object> params = new ArrayList<>();
-        String queryPattern = toLikePattern(normalizedQuery);
-        params.add(normalizedQuery);
-        params.add(normalizedQuery);
-        params.add(normalizedQuery);
-        params.add(queryPattern);
-        params.add(queryPattern);
-        params.add(queryPattern);
-
-        for (String term : boundedTerms) {
-            sql.append("""
-                      OR c.content ILIKE ? ESCAPE '\\'
-                      OR COALESCE(c.heading, '') ILIKE ? ESCAPE '\\'
-                      OR d.title ILIKE ? ESCAPE '\\'
-                    """);
-            String pattern = toLikePattern(term);
-            params.add(pattern);
-            params.add(pattern);
-            params.add(pattern);
+        Object[] params = new Object[28];
+        int p = 0;
+        params[p++] = normalizedQuery;
+        params[p++] = normalizedQuery;
+        params[p++] = normalizedQuery;
+        for (int repeat = 0; repeat < 3; repeat++) {
+            for (String pattern : patterns) {
+                params[p++] = pattern;
+            }
         }
-
-        sql.append("""
-                  )
-                ORDER BY GREATEST(
-                    word_similarity(?, d.title),
-                    word_similarity(?, COALESCE(c.heading, '')),
-                    word_similarity(?, c.content)
-                ) DESC,
-                d.created_at DESC,
-                c.chunk_index ASC
-                LIMIT ?
-                """);
-        params.add(normalizedQuery);
-        params.add(normalizedQuery);
-        params.add(normalizedQuery);
-        params.add(limit);
+        params[p++] = normalizedQuery;
+        params[p++] = normalizedQuery;
+        params[p++] = normalizedQuery;
+        params[p] = limit;
 
         try {
-            return jdbcTemplate.query(sql.toString(), (rs, rowNum) -> mapReadyChunk(rs), params.toArray());
+            return jdbcTemplate.query(SEARCH_LEXICAL_PG_TRGM_SQL, (rs, rowNum) -> mapReadyChunk(rs), params);
         } catch (RuntimeException exception) {
             log.warn("PostgreSQL pg_trgm lexical query failed; falling back to full scan ({})", exception.getMessage());
             return findAllReadyChunks();
