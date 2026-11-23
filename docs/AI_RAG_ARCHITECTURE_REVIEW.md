@@ -1,7 +1,7 @@
-# AI Chat & RAG — Architecture Evaluation
+# AI Chat & RAG — Architecture Evaluation & Execution Plan
 
-**Date:** 2026-11-22
-
+**Initial Review:** 2026-11-22  
+**Last Updated:** 2026-11-23 (baseline commit `b4f553c` on `cursor/knowledge-agent-2fe5`)  
 **Scope:** `com.currencyanalyzer.ai.chat`, `ai.springai`, `ai.knowledge`, `ai.rag`, `storage`
 
 ---
@@ -12,77 +12,30 @@
 |---|---|
 | **Storage split** | GCS keeps the original files and PostgreSQL holds the derived index. You can rebuild the index at any time (`DELETE` + Sync). |
 | **Single runtime store** | Chat history, app data, and vectors all live in one PostgreSQL database—one backup, one set of transactions, and no extra infrastructure to operate. |
-| **Tool grounding** | Market numbers come from typed, read-only tools (`AssistantTools`), not from model memory. The prompt forbids inventing prices. |
-| **Testability** | `ObjectStorageClient` has a local implementation, `pgvector` detection falls back cleanly to H2, and all 60 tests run offline. |
-| **Hybrid retrieval** | Vector + exact-phrase fusion fixed the entity-name failures that a small embedding model cannot handle on its own. |
+| **Tool grounding** | Market numbers come from typed, read-only tools (`AssistantTools` / `SpringAiMarketTools`), not from model memory. The prompt forbids inventing prices. |
+| **Testability** | `ObjectStorageClient` has a local implementation, `pgvector` and `pg_trgm` detection fall back cleanly to H2, and all **96 tests** run offline (`SonarCloud` Quality Gate `OK`, `82.1%` new-code coverage). |
+| **Hybrid retrieval + RRF** | Vector search (`pgvector` HNSW) + PostgreSQL `pg_trgm` lexical search + Reciprocal Rank Fusion (`k = 60`) + targeted sibling lookup by document ID (`WHERE d.id IN (:documentIds)`). |
+| **Hardening** | Static system prompt with delimited untrusted reference context, follow-up query rewriting, per-user daily usage metering, startup recovery of stuck docs, and bucket-scoped GCS deletion pruning. |
 
 ---
 
-## 2. Risks & Gaps (Prioritized)
+## 2. Roadmap Status (as of `b4f553c`)
 
-### P0: Correctness & Safety
-
-1. **Retrieved documents are injected into the *system* message.**
-   `AssistantPrompt.systemMessage` (`src/main/java/com/currencyanalyzer/ai/knowledge/AssistantPrompt.java`) appends chunk text directly to the system prompt. Anyone who can upload a `.md` file can place untrusted text where the model gives it the highest authority, which is a prompt-injection risk.
-   - **Fix:** Keep the system prompt static. Pass retrieved chunks as a separate, clearly delimited context message (or tool result) labeled as *untrusted reference material*.
-
-2. **Follow-up questions retrieve the wrong context.**
-   `AiConversationService.systemMessage` (`src/main/java/com/currencyanalyzer/ai/chat/AiConversationService.java`) retrieves using only the latest user message. A follow-up like *"what about his risk view?"* lacks the entity name, so retrieval misses.
-   - **Fix:** Add a lightweight query-rewrite step that condenses the last few turns into a standalone search query (a short LLM call or rule-based fallback), or rely on the model calling `search_notes` with an explicit query.
-
-3. **Ingestion is not durable.**
-   Jobs live only in an in-memory thread pool. If the app restarts mid-sync, documents stay in `PENDING`/`INDEXING` indefinitely.
-   - **Fix:** On startup, re-queue rows stuck in `PENDING`/`INDEXING`. Better: claim jobs from a DB table using `SELECT ... FOR UPDATE SKIP LOCKED`.
-
-4. **GCS deletions never reach the index.**
-   `syncFromStorage` only adds and updates. A file deleted directly in the GCS bucket continues answering questions from stale `rag_chunks`.
-   - **Fix:** During sync, delete `upload` rows under the scanned prefix whose `storage_key` was not returned by GCS.
-
-### P1: Scale & Retrieval Quality
-
-5. **Keyword search loads every chunk on every query.**
-   `RagChunkRetriever.search` (`src/main/java/com/currencyanalyzer/ai/rag/RagChunkRetriever.java`) calls `findAllReadyChunks()` and scores them in Java. That is fine for ~1,000 chunks but scales linearly, and parent-document expansion reuses the same full scan.
-   - **Fix:** Move lexical search into PostgreSQL:
-     - Add `pg_trgm` with a GIN index for CJK and mixed text (no Chinese word segmenter required), or `tsvector` with `zhparser`.
-     - Fetch sibling chunks with `WHERE document_id = ANY(?)`.
-
-6. **Scoring relies on hand-tuned constants with no evaluation set.**
-   Weights like `0.18`, `-0.08`, `0.45 + score/70 * 0.54`, and stub/changelog multipliers were tuned by hand.
-   - **Fix:**
-     - Replace score blending with **Reciprocal Rank Fusion (RRF)**, which operates on rank positions and requires no score calibration.
-     - Add a **golden evaluation set** of 30–50 questions mapped to expected chunks.
-     - Track `Recall@5` and `MRR` in CI so tuning changes are measured objectively.
-
-7. **The embedding model is the main ceiling on retrieval quality.**
-   `paraphrase-multilingual-MiniLM-L12-v2` (384-dim, 256-token window) is weak on Chinese finance terminology and cross-lingual matches, which is why the hybrid heuristics were needed.
-   - **Fix:** Upgrade to `bge-m3` (local ONNX, 1024-dim, 8k tokens, strong zh/en) or a hosted embedding API, and optionally add a cross-encoder reranker (`bge-reranker-v2-m3`) over the top ~20 candidates. Do this **after** #8 so the migration is zero-downtime.
-
-8. **No embedding version metadata on chunks.**
-   Changing the embedding model or vector dimension makes stored vectors silently incompatible.
-   - **Fix:** Add `embedding_model` and `embedding_dim` columns to `rag_chunks`, filter searches by the active model, and re-embed in the background.
-
-### P2: Operations & Maintainability
-
-9. **Two chat orchestration paths.**
-   `SpringAiChatRunner` (Spring AI `ChatModel`) and the hand-rolled `DeepSeekAiProvider` + `AssistantTools` loop duplicate tool-calling, retries, and thinking-fallback logic.
-   - **Fix:** Standardize on Spring AI's `ChatClient` with `@Tool` beans and remove the legacy path once parity tests pass.
-
-10. **No usage limits are enforced.**
-    The `ai_usage` table exists (from `V2`), but no service writes to it or enforces quotas.
-    - **Fix:** Record token usage per message and enforce per-user daily request and token limits as designed in [AI_ASSISTANT_MODULE.md](./AI_ASSISTANT_MODULE.md).
-
-11. **Citations do not reach the UI, and retrieval is not observable.**
-    The model is asked to name note titles in prose, but the UI receives no structured source metadata.
-    - **Fix:**
-      - Emit an SSE `sources` event with document IDs, chunk indices, and scores, and render clickable citations in the chat drawer.
-      - Log each retrieval (query, chunk IDs, scores, latency) and expose Micrometer metrics (`rag_retrieval_seconds`, `rag_hits`).
-
-12. **No per-user access control on documents.**
-    Shared workspace access is appropriate for general notes and guides. If personal `journal/` or holdings files are ever indexed, add `visibility` and `owner` columns to `rag_documents` and filter at query time.
-
-13. **Conversation memory has a hard cap.**
-    `MAX_CONTEXT_MESSAGES = 20` drops older turns without summarization.
-    - **Fix:** Maintain a rolling summary message once conversation history exceeds N turns.
+| # | Priority | Item | Status | Notes / Remaining Gaps |
+|---|---|---|---|---|
+| 1 | P0 | Retrieved notes out of the system prompt | **Done (1 gap)** | **Gap A:** `AssistantPrompt.referenceContext` does not sanitize literal `UNTRUSTED REFERENCE CONTEXT` / `END UNTRUSTED REFERENCE CONTEXT` lines inside uploaded documents. |
+| 2 | P0 | Rewrite follow-up questions | **Done (1 bug)** | **Gap B:** `RetrievalQueryRewriter` prepends prior turns before the question up to 800 chars, which can truncate a Chinese follow-up past MiniLM's 256-token cap; Chinese follow-up detection only matches `[他她它其]`. |
+| 3 | P0 | Durable ingestion & startup re-queue | **Done (basic)** | Startup recovery (`RagStartupSyncRunner` + `recoverStuckDocuments`) is live. Durable DB job queue (`SELECT ... FOR UPDATE SKIP LOCKED`) is optional future work for multi-instance deployments. |
+| 4 | P0 | Remove index rows for files deleted from GCS | **Done** | `pruneDeletedUploads` reconciles deleted objects, guarded by bucket match and non-empty listing check. |
+| 5 | P1 | Lexical search & sibling lookup in PostgreSQL | **Done (caveat)** | `V7__rag_pg_trgm.sql` + `searchLexicalCandidates` + `findReadyChunksByDocumentIds`. **Caveat D:** verify DB locale is UTF-8 (not `C`) for `pg_trgm` CJK indexing; 2-char CJK `ILIKE` terms do not use the GIN trigram index. |
+| 6 | P1 | Rank fusion (RRF) + golden eval set | **Done (caveat)** | `fuseWithRrf` (`k = 60`) + 30-query bilingual `RagRetrievalEvaluationTests` (`Recall@5 >= 0.90`, `MRR >= 0.80`). **Caveat E:** eval currently runs on H2 lexical-only and checks filename rather than chunk ID. |
+| 7 | P1 | Upgrade embedding model (`bge-m3`) + reranker | **Open** | **Blocked on #8** so vector dimension changes (`384 -> 1024`) are zero-downtime. |
+| 8 | P1 | Embedding version metadata on chunks | **Open** | **Next major milestone** after closing Gaps A–C. |
+| 9 | P2 | Consolidate to one chat orchestration path | **Open** | Remove legacy `DeepSeekAiProvider` + `AssistantTools` loop once `SpringAiChatRunner` reaches full parity. |
+| 10 | P2 | Enforce usage limits (`ai_usage`) | **Done (gaps)** | **Gap C:** limits default to `0` (disabled); `retryWithoutThinking` is uncounted; "requests" counts model calls rather than user messages; concurrent chats can soft-overshoot. |
+| 11 | P2 | Structured SSE `sources` citations + retrieval metrics | **Open** | Emit `sources` SSE event to `ai-chat.js` and add Micrometer timers/counters (`rag_retrieval_seconds`, `rag_hits`). |
+| 12 | P2 | Per-user document access control | **Deferred** | Not needed while the corpus contains only shared guides and notes; revisit before indexing personal `journal/` or holdings files. |
+| 13 | P2 | Rolling summary of long conversations | **Open** | `MAX_CONTEXT_MESSAGES = 20` currently drops older turns without summarization. |
 
 ---
 
@@ -90,33 +43,106 @@
 
 ```mermaid
 flowchart LR
-    U["User question + history"] --> QR["Query rewriter (standalone query)"]
-    QR --> V["pgvector ANN (top 30)"]
+    U["User question + history"] --> QR["Query rewriter (question-first, CJK-budgeted)"]
+    QR --> V["pgvector ANN (top 30, filtered by embedding_model)"]
     QR --> L["pg_trgm / tsvector (top 30)"]
-    V --> F["RRF fusion"]
+    V --> F["RRF fusion (k=60)"]
     L --> F
     F --> RR["Cross-encoder reranker (top 20 to 5)"]
-    RR --> CTX["Delimited context message (untrusted)"]
+    RR --> CTX["Delimited context message (sanitized untrusted)"]
     SYS["Static system prompt"] --> LLM["Spring AI ChatClient (DeepSeek) + @Tool beans"]
     CTX --> LLM
     LLM --> SSE["SSE: text_delta + sources + usage"]
-    RR -.-> LOG["Retrieval log + metrics"]
+    RR -.-> LOG["Retrieval log + Micrometer metrics"]
     subgraph Ingest
-        GCS["GCS bucket"] --> JOB["Durable job table (SKIP LOCKED)"]
-        JOB --> EMB["Embedder (versioned)"]
-        EMB --> PG["rag_chunks (embedding_model, tsv)"]
+        GCS["GCS bucket"] --> JOB["Startup recovery / durable job queue"]
+        JOB --> EMB["Embedder (versioned model + dim)"]
+        EMB --> PG["rag_chunks (embedding_model, embedding_dim)"]
     end
 ```
 
 ---
 
-## 4. Suggested Roadmap
+## 4. Direction & Execution Plan (Handoff Packages)
 
-| Phase | Items | Effort |
-|---|---|---:|
-| **1. Hardening** | #1 context out of system prompt · #3 startup re-queue · #4 deletion sync · #10 usage limits | 2–3 days |
-| **2. Retrieval quality** | #2 query rewrite · #5 lexical search in PostgreSQL · #6 RRF + golden eval set | 3–4 days |
-| **3. Model upgrade** | #8 embedding versioning · #7 `bge-m3` + reranker | 3–5 days |
-| **4. UX & ops** | #11 citations + metrics · #9 single chat path · #13 memory summary | 3–4 days |
+Execute the remaining work in **4 sequential workstreams** so each PR stays small, testable, and safe to ship independently.
 
-> **Tip:** Build the golden evaluation set (#6) before upgrading the embedding model (#7) so you can verify quantitatively that `bge-m3` or a reranker beats the current hybrid heuristics.
+### Workstream 1 — Close Phase 1–2 Gaps (A, B, C) *(Immediate — 0.5 day)*
+
+Fix the three concrete gaps found in the `b4f553c` review before adding new features:
+
+1. **Sanitize untrusted context delimiters (Gap A)**
+   - **File:** `src/main/java/com/currencyanalyzer/ai/knowledge/AssistantPrompt.java`
+   - **Change:** Strip or neutralize literal `UNTRUSTED REFERENCE CONTEXT` and `END UNTRUSTED REFERENCE CONTEXT` lines inside note titles and excerpts before wrapping in `referenceContext(...)`.
+   - **Test:** Add a prompt-injection test in `KnowledgeRetrieverTests` verifying an adversarial note containing `END UNTRUSTED REFERENCE CONTEXT` cannot break out of the block.
+
+2. **Question-first, CJK-budgeted query rewriter (Gap B)**
+   - **File:** `src/main/java/com/currencyanalyzer/ai/knowledge/RetrievalQueryRewriter.java`
+   - **Change:**
+     - Place the **latest user question first** (`question + "\n" + prior`), then append trimmed prior context within a CJK-weighted token budget (`<= 220` estimated tokens so MiniLM's 256-token window never drops the question).
+     - Expand Chinese follow-up detection beyond `[他她它其]` to include common short follow-ups (`那`, `这`, `该`, trailing `呢`/`吗`, and short queries `<= 12` CJK chars).
+   - **Test:** Add unit tests covering long Chinese prior turns + short Chinese follow-up (`风险呢？`, `那为什么？`) asserting the rewritten query keeps the question intact and stays under the token cap.
+
+3. **Close usage-metering gaps (Gap C)**
+   - **Files:** `src/main/java/com/currencyanalyzer/ai/chat/AiConversationService.java`, `src/main/java/com/currencyanalyzer/ai/chat/AiUsageService.java`, `src/main/resources/application.yml`, `compose.yaml`
+   - **Change:**
+     - Route `retryWithoutThinking(...)` through `aiProvider.consume(...)` and record its usage in `UsageLedger` (so retries cannot bypass quotas).
+     - Clarify and align request counting semantics (prefer counting **user messages** as `1` request per `streamMessage` while summing all round tokens, or rename to `daily-model-call-limit`).
+     - Document soft-limit behavior under concurrent conversations and set sensible non-zero defaults in `compose.yaml` while keeping `0` in test `application.yml`.
+   - **Test:** Add a test in `AiConversationControllerTests` verifying `retryWithoutThinking` increments `ai_usage`.
+
+---
+
+### Workstream 2 — Embedding Versioning & Model Upgrade (#8 → #7) *(3–5 days)*
+
+Do **#8 first**, then **#7**, so migrating from 384-dim MiniLM to 1024-dim `bge-m3` (or hosted embeddings) is zero-downtime.
+
+1. **#8 — Embedding version metadata**
+   - **Migrations:**
+     - `src/main/resources/db/migration/V8__rag_embedding_metadata.sql`: add `embedding_model VARCHAR(128)` and `embedding_dim INTEGER` columns to `rag_chunks` (portable H2 + PostgreSQL DDL).
+     - Keep any PostgreSQL-only vector column/index changes in `src/main/resources/db/postgresql-migration/` (guarded by `pg_available_extensions`).
+   - **Files:** `RagDocumentRepository.java`, `RagIngestionService.java`, `LazyTransformersEmbeddingModel.java`, `application.yml`
+   - **Change:**
+     - Persist active `embedding_model` + `embedding_dim` when writing chunks.
+     - Filter `searchByVector(...)` by `WHERE c.embedding_model = ? AND c.embedding_dim = ?` so mismatched vectors are never compared.
+     - On startup (or via admin re-index), detect ready documents whose chunks have a stale `embedding_model` and re-queue them asynchronously in the background.
+   - **Test:** Verify mixed-model chunks only return matches for the active model, and stale-model documents are detected for background re-embedding.
+
+2. **#7 — Upgrade embedding model + optional reranker + vector eval**
+   - **Pre-step (Caveat E):** Extend `RagRetrievalEvaluationTests` with a real-embedding (or PostgreSQL Testcontainers) benchmark profile that asserts **chunk-level** `Recall@5` and `MRR` on the 30+ query golden set.
+   - **Change:** Add configurable support for `bge-m3` (1024-dim, 8k window) or hosted embedding API, and optionally add a cross-encoder reranker (`bge-reranker-v2-m3`) over the top 20 RRF candidates.
+   - **Gate:** Only promote the new model as default once it beats the MiniLM baseline on the golden evaluation set.
+
+---
+
+### Workstream 3 — Citations, Observability & Chat Consolidation (#11, #9) *(3–4 days)*
+
+1. **#11 — Structured SSE `sources` + Micrometer metrics**
+   - **Backend:** `AiConversationService.java`, `RagChunkRetriever.java`
+     - Emit a structured SSE `sources` event (`[{documentId, title, filename, chunkIndex, heading, score}]`) when context is attached.
+     - Record Micrometer metrics (`rag_retrieval_seconds`, `rag_hits`, `rag_fallback_total`) and structured debug logs (latency, hit count, top score — never logging raw user prefix/PII).
+   - **Frontend:** `src/main/resources/static/ai-chat.js`
+     - Render clickable citation chips below each assistant answer linking to the document preview/download.
+
+2. **#9 — Consolidate to a single chat orchestration path**
+   - **Files:** `SpringAiChatRunner.java`, `AiConversationService.java`, `DeepSeekAiProvider.java`, `AssistantTools.java`
+   - **Change:** Verify full feature parity in `SpringAiChatRunner` (streaming, reasoning, tool calling, usage metering, truncation continuation), migrate remaining tests, and remove the duplicate `DeepSeekAiProvider` tool-calling loop.
+
+---
+
+### Workstream 4 — Conversation Memory & Operational Polish (#13, #3-durable, #12) *(As needed)*
+
+1. **#13 — Rolling conversation summary:** When a conversation exceeds 20 messages, summarize older turns into a stored summary row on `ai_conversations` instead of silently dropping history.
+2. **#3 (multi-instance durability):** If scaling beyond one app instance, move ingestion dispatch from the in-memory fixed thread pool to a DB-backed job table claimed with `SELECT ... FOR UPDATE SKIP LOCKED`.
+3. **#12 — Per-user document ACL:** Only if personal `journal/` or holdings files are added to RAG, add `visibility` (`shared` / `private`) and `owner_username` to `rag_documents` and enforce the filter in every retrieval SQL query.
+
+---
+
+## 5. Verification Gate for Every Workstream
+
+Every implementing agent/model must satisfy all checks before pushing:
+1. Run `.\mvnw.cmd -o clean verify` on JDK 25 (`0` failures/errors).
+2. Confirm JaCoCo new-code coverage is comfortably `>= 80%` (aim for `>= 83%` on modified packages).
+3. Keep PostgreSQL-only DDL (`pgvector`, `pg_trgm`, GIN/HNSW) strictly inside `src/main/resources/db/postgresql-migration/`.
+4. Use static SQL constants (`NamedParameterJdbcTemplate` or fixed placeholders) to avoid Sonar `java:S2077`.
+5. Confirm GitHub CI (`verify`, `SonarCloud Code Analysis`, `qodana`) all complete green.
