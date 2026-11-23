@@ -167,4 +167,72 @@ class MarketDataServiceTests {
         assertThat(MarketDataService.parseProxyAddress("https://proxy.example.com"))
             .isEqualTo(new InetSocketAddress("proxy.example.com", 443));
     }
+
+    @Test
+    void historicalFxUsesYahooPrimaryDeduplicatesSameDayAndCaches() {
+        long nov20 = Instant.parse("2026-11-20T00:00:00Z").getEpochSecond();
+        long nov23Early = Instant.parse("2026-11-23T01:00:00Z").getEpochSecond();
+        long nov23Later = Instant.parse("2026-11-23T09:00:00Z").getEpochSecond();
+
+        RestClient.Builder builder = RestClient.builder();
+        MockRestServiceServer server = MockRestServiceServer.bindTo(builder).build();
+        server.expect(requestTo("https://query1.finance.yahoo.com/v8/finance/chart/USDJPY%3DX?range=1mo&interval=1d"))
+            .andRespond(withSuccess("""
+                {
+                  "chart": {
+                    "result": [{
+                      "timestamp": [%d, %d, %d],
+                      "indicators": {
+                        "quote": [{
+                          "close": [153.80, 154.10, 154.55]
+                        }]
+                      }
+                    }]
+                  }
+                }
+                """.formatted(nov20, nov23Early, nov23Later), MediaType.APPLICATION_JSON));
+
+        MarketDataService service = new MarketDataService(
+            builder.build(),
+            FIXED_CLOCK,
+            List.of("USD/JPY"),
+            new LiveRateCache(Duration.ofSeconds(60), Ticker.systemTicker())
+        );
+
+        List<HistoricalPoint> first = service.fetchHistorical("USD/JPY", 30);
+        assertThat(first).containsExactly(
+            new HistoricalPoint("2026-11-20", 153.8),
+            new HistoricalPoint("2026-11-23", 154.55)
+        );
+
+        List<HistoricalPoint> second = service.fetchHistorical("USD/JPY", 30);
+        assertThat(second).isEqualTo(first);
+        server.verify();
+    }
+
+    @Test
+    void historicalFxFallsBackToFrankfurterWhenYahooFails() {
+        RestClient.Builder builder = RestClient.builder();
+        MockRestServiceServer server = MockRestServiceServer.bindTo(builder).build();
+        server.expect(requestTo("https://query1.finance.yahoo.com/v8/finance/chart/USDJPY%3DX?range=1mo&interval=1d"))
+            .andRespond(withServerError());
+        server.expect(requestTo("https://api.frankfurter.app/2026-10-21..2026-11-20?from=USD&to=JPY"))
+            .andRespond(withSuccess("""
+                {"rates":{"2026-11-19":{"JPY":153.2},"2026-11-20":{"JPY":153.8}}}
+                """, MediaType.APPLICATION_JSON));
+
+        MarketDataService service = new MarketDataService(
+            builder.build(),
+            FIXED_CLOCK,
+            List.of("USD/JPY"),
+            new LiveRateCache(Duration.ofSeconds(60), Ticker.systemTicker())
+        );
+
+        List<HistoricalPoint> points = service.fetchHistorical("USD/JPY", 30);
+        assertThat(points).containsExactly(
+            new HistoricalPoint("2026-11-19", 153.2),
+            new HistoricalPoint("2026-11-20", 153.8)
+        );
+        server.verify();
+    }
 }

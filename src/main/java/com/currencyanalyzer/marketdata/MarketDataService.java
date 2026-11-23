@@ -4,6 +4,8 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 import com.github.benmanes.caffeine.cache.Ticker;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
@@ -43,6 +45,8 @@ public class MarketDataService {
 
     private static final Logger log = LoggerFactory.getLogger(MarketDataService.class);
     private static final int MAX_HISTORY_DAYS = 3650;
+    private static final int HISTORICAL_CACHE_MAX_ENTRIES = 200;
+    private static final long DEFAULT_HISTORICAL_CACHE_TTL_SECONDS = 300;
     private static final String HTTP_USER_AGENT = "Mozilla/5.0 (compatible; CurrencyAnalyzer/1.0)";
 
     private static final Map<String, String> COMMODITY_SYMBOLS = Map.ofEntries(
@@ -63,19 +67,22 @@ public class MarketDataService {
     private final Clock clock;
     private final List<String> configuredPairs;
     private final LiveRateCache liveRateCache;
+    private final Cache<HistoricalKey, List<HistoricalPoint>> historicalCache;
 
     @Autowired
     public MarketDataService(
         RestClient.Builder restClientBuilder,
         Clock clock,
         @Value("${app.market.pairs:}") String pairs,
-        @Value("${app.market.live-cache-ttl-seconds:60}") long liveCacheTtlSeconds
+        @Value("${app.market.live-cache-ttl-seconds:60}") long liveCacheTtlSeconds,
+        @Value("${app.market.historical-cache-ttl-seconds:300}") long historicalCacheTtlSeconds
     ) {
         this(
             buildRestClient(restClientBuilder),
             clock,
             parseConfiguredPairs(pairs),
-            new LiveRateCache(Duration.ofSeconds(liveCacheTtlSeconds), Ticker.systemTicker())
+            new LiveRateCache(Duration.ofSeconds(liveCacheTtlSeconds), Ticker.systemTicker()),
+            buildHistoricalCache(historicalCacheTtlSeconds)
         );
     }
 
@@ -85,6 +92,22 @@ public class MarketDataService {
         List<String> configuredPairs,
         LiveRateCache liveRateCache
     ) {
+        this(
+            restClient,
+            clock,
+            configuredPairs,
+            liveRateCache,
+            buildHistoricalCache(DEFAULT_HISTORICAL_CACHE_TTL_SECONDS)
+        );
+    }
+
+    MarketDataService(
+        RestClient restClient,
+        Clock clock,
+        List<String> configuredPairs,
+        LiveRateCache liveRateCache,
+        Cache<HistoricalKey, List<HistoricalPoint>> historicalCache
+    ) {
         this.restClient = restClient;
         this.objectMapper = new ObjectMapper();
         this.clock = clock;
@@ -92,6 +115,14 @@ public class MarketDataService {
             .map(MarketDataService::normalizePair)
             .toList();
         this.liveRateCache = liveRateCache;
+        this.historicalCache = historicalCache;
+    }
+
+    private static Cache<HistoricalKey, List<HistoricalPoint>> buildHistoricalCache(long ttlSeconds) {
+        return Caffeine.newBuilder()
+            .expireAfterWrite(Duration.ofSeconds(Math.max(1, ttlSeconds)))
+            .maximumSize(HISTORICAL_CACHE_MAX_ENTRIES)
+            .build();
     }
 
     public Map<String, LiveRate> fetchLiveRates() {
@@ -171,16 +202,29 @@ public class MarketDataService {
             throw new IllegalArgumentException("days must be between 1 and " + MAX_HISTORY_DAYS);
         }
 
+        HistoricalKey cacheKey = new HistoricalKey(pair, requestedDays);
+        List<HistoricalPoint> cached = historicalCache.getIfPresent(cacheKey);
+        if (cached != null) {
+            return cached;
+        }
+
+        List<HistoricalPoint> loaded = List.copyOf(loadHistorical(pair, requestedDays));
+        if (!loaded.isEmpty()) {
+            historicalCache.put(cacheKey, loaded);
+        }
+        return loaded;
+    }
+
+    private List<HistoricalPoint> loadHistorical(String pair, int requestedDays) {
         String commoditySymbol = COMMODITY_SYMBOLS.get(pair);
         if (commoditySymbol != null) {
-            List<HistoricalPoint> points = fetchYahooHistory(commoditySymbol, requestedDays);
-            return trimToRecent(points, requestedDays);
+            return trimToRecent(fetchYahooHistory(commoditySymbol, requestedDays), requestedDays);
         }
 
         String[] parts = pair.split("/");
-        List<HistoricalPoint> points = fetchFrankfurterHistory(parts[0], parts[1], requestedDays);
+        List<HistoricalPoint> points = fetchYahooHistory(parts[0] + parts[1] + "=X", requestedDays);
         if (points.isEmpty()) {
-            points = fetchYahooHistory(parts[0] + parts[1] + "=X", requestedDays);
+            points = fetchFrankfurterHistory(parts[0], parts[1], requestedDays);
         }
         return trimToRecent(points, requestedDays);
     }
@@ -393,7 +437,7 @@ public class MarketDataService {
                 return List.of();
             }
 
-            List<HistoricalPoint> points = new ArrayList<>();
+            Map<String, HistoricalPoint> byDate = new TreeMap<>();
             int count = Math.min(timestamps.size(), closes.size());
             for (int index = 0; index < count; index++) {
                 JsonNode close = closes.get(index);
@@ -405,9 +449,9 @@ public class MarketDataService {
                     .atZone(ZoneOffset.UTC)
                     .toLocalDate()
                     .toString();
-                points.add(new HistoricalPoint(date, close.asDouble()));
+                byDate.put(date, new HistoricalPoint(date, close.asDouble()));
             }
-            return points;
+            return new ArrayList<>(byDate.values());
         } catch (RuntimeException exception) {
             log.warn("Unable to fetch Yahoo history for {}: {}", symbol, rootMessage(exception));
             return List.of();
@@ -584,5 +628,8 @@ public class MarketDataService {
             current = current.getCause();
         }
         return current.getMessage() == null ? current.getClass().getSimpleName() : current.getMessage();
+    }
+
+    record HistoricalKey(String pair, int days) {
     }
 }
