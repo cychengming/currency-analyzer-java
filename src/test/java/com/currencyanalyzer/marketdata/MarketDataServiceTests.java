@@ -37,11 +37,12 @@ class MarketDataServiceTests {
                     "result": [{
                       "meta": {
                         "regularMarketPrice": 1.0950,
-                        "chartPreviousClose": 1.0900
+                        "previousClose": 1.0900,
+                        "chartPreviousClose": 1.0880
                       },
                       "indicators": {
                         "quote": [{
-                          "close": [1.0880, 1.0900]
+                          "close": [1.0880, 1.0900, 1.0950]
                         }]
                       }
                     }]
@@ -104,11 +105,12 @@ class MarketDataServiceTests {
                     "result": [{
                       "meta": {
                         "regularMarketPrice": 2655.50,
-                        "chartPreviousClose": 2630.00
+                        "previousClose": 2630.00,
+                        "chartPreviousClose": 2610.00
                       },
                       "indicators": {
                         "quote": [{
-                          "close": [2610.00, 2630.00]
+                          "close": [2610.00, 2630.00, 2655.50]
                         }]
                       }
                     }]
@@ -234,5 +236,178 @@ class MarketDataServiceTests {
             new HistoricalPoint("2026-11-20", 153.8)
         );
         server.verify();
+    }
+
+    @Test
+    void ndxLiveRateUsesFulldayChangeInsteadOfFiveDayChartPreviousClose() {
+        MarketDataService service = serviceWithMockYahooResponse("%5ENDX", List.of("NDX/USD"), """
+            {
+              "chart": {
+                "result": [{
+                  "meta": {
+                    "regularMarketPrice": 26746.096,
+                    "regularMarketChangePercent": 6.86,
+                    "fulldayChange": 1717.096,
+                    "fulldayChangePercent": 6.86,
+                    "chartPreviousClose": 27197.15
+                  },
+                  "indicators": {
+                    "quote": [{
+                      "close": [27001.78, 27116.26, 26517.05, 25028.98, 26746.10]
+                    }]
+                  }
+                }]
+              }
+            }
+            """);
+
+        assertThat(service.configuredPairs()).containsExactly("NDX/USD");
+        Map<String, LiveRate> rates = service.fetchLiveRates();
+        assertThat(rates.get("NDX/USD")).isEqualTo(new LiveRate(26746.096, 1717.096, 6.86));
+    }
+
+    @Test
+    void yahooLiveRateFallsBackToPriorDailyCloseBeforeChartPreviousClose() {
+        MarketDataService service = serviceWithMockYahooResponse("%5ENDX", List.of("NDX/USD"), """
+            {
+              "chart": {
+                "result": [{
+                  "meta": {
+                    "regularMarketPrice": 26746.096,
+                    "chartPreviousClose": 27197.15
+                  },
+                  "indicators": {
+                    "quote": [{
+                      "close": [27001.78, 25028.98, 26746.10]
+                    }]
+                  }
+                }]
+              }
+            }
+            """);
+
+        Map<String, LiveRate> rates = service.fetchLiveRates();
+        assertThat(rates.get("NDX/USD")).isEqualTo(new LiveRate(26746.096, 1717.116, 6.86));
+    }
+
+    @Test
+    void yahooLiveRateSupportsRegularMarketChangePercentAndSingleBarFallbacks() {
+        MarketDataService percentFallback = serviceWithMockYahooResponse("%5ENDX", List.of("NDX/USD"), """
+            {
+              "chart": {
+                "result": [{
+                  "meta": {
+                    "regularMarketPrice": 110.0,
+                    "regularMarketChangePercent": 10.0,
+                    "chartPreviousClose": 125.0
+                  },
+                  "indicators": {
+                    "quote": [{
+                      "close": [110.0]
+                    }]
+                  }
+                }]
+              }
+            }
+            """);
+        assertThat(percentFallback.fetchLiveRates().get("NDX/USD"))
+            .isEqualTo(new LiveRate(110.0, 10.0, 10.0));
+
+        MarketDataService fulldayDerivedPercent = serviceWithMockYahooResponse("%5EGSPC", List.of("SPX/USD"), """
+            {
+              "chart": {
+                "result": [{
+                  "meta": {
+                    "regularMarketPrice": 105.0,
+                    "fulldayChange": 5.0
+                  },
+                  "indicators": {
+                    "quote": [{
+                      "close": [105.0]
+                    }]
+                  }
+                }]
+              }
+            }
+            """);
+        assertThat(fulldayDerivedPercent.fetchLiveRates().get("SPX/USD"))
+            .isEqualTo(new LiveRate(105.0, 5.0, 5.0));
+
+        MarketDataService chartPreviousLastResort = serviceWithMockYahooResponse("%5EGSPC", List.of("SPX/USD"), """
+            {
+              "chart": {
+                "result": [{
+                  "meta": {
+                    "regularMarketPrice": 105.0,
+                    "chartPreviousClose": 100.0
+                  },
+                  "indicators": {
+                    "quote": [{
+                      "close": [105.0]
+                    }]
+                  }
+                }]
+              }
+            }
+            """);
+        assertThat(chartPreviousLastResort.fetchLiveRates().get("SPX/USD"))
+            .isEqualTo(new LiveRate(105.0, 5.0, 5.0));
+
+        MarketDataService fulldayWithMarketPercent = serviceWithMockYahooResponse("%5EGSPC", List.of("SPX/USD"), """
+            {
+              "chart": {
+                "result": [{
+                  "meta": {
+                    "regularMarketPrice": 105.0,
+                    "fulldayChange": 5.0,
+                    "regularMarketChangePercent": 5.25
+                  },
+                  "indicators": {
+                    "quote": [{
+                      "close": [105.0]
+                    }]
+                  }
+                }]
+              }
+            }
+            """);
+        assertThat(fulldayWithMarketPercent.fetchLiveRates().get("SPX/USD"))
+            .isEqualTo(new LiveRate(105.0, 5.0, 5.25));
+
+        MarketDataService singleBarNoPrevious = serviceWithMockYahooResponse("%5EGSPC", List.of("SPX/USD"), """
+            {
+              "chart": {
+                "result": [{
+                  "meta": {
+                    "regularMarketPrice": 105.0
+                  },
+                  "indicators": {
+                    "quote": [{
+                      "close": [105.0]
+                    }]
+                  }
+                }]
+              }
+            }
+            """);
+        assertThat(singleBarNoPrevious.fetchLiveRates().get("SPX/USD"))
+            .isEqualTo(new LiveRate(105.0, 0.0, 0.0));
+    }
+
+    private static MarketDataService serviceWithMockYahooResponse(
+        String encodedSymbol,
+        List<String> pairs,
+        String payload
+    ) {
+        RestClient.Builder builder = RestClient.builder();
+        MockRestServiceServer server = MockRestServiceServer.bindTo(builder).build();
+        server.expect(requestTo("https://query1.finance.yahoo.com/v8/finance/chart/" + encodedSymbol + "?range=5d&interval=1d"))
+            .andRespond(withSuccess(payload, MediaType.APPLICATION_JSON));
+        return new MarketDataService(
+            builder.build(),
+            FIXED_CLOCK,
+            pairs,
+            new LiveRateCache(Duration.ofSeconds(60), Ticker.systemTicker())
+        );
     }
 }

@@ -25,7 +25,7 @@
         const [registerUsername, setRegisterUsername] = useState('');
         const [registerPassword, setRegisterPassword] = useState('');
         const [registerError, setRegisterError] = useState('');
-        const [registrationEnabled, setRegistrationEnabled] = useState(true);
+        const [registrationEnabled, setRegistrationEnabled] = useState(false);
 
         const [infoMessage, setInfoMessage] = useState('');
 
@@ -37,8 +37,9 @@
                     window.location.href = '/dashboard.html';
                     return;
                 }
-                if (data && data.registration_enabled === false) {
-                    setRegistrationEnabled(false);
+                const enabled = data?.registration_enabled !== false;
+                setRegistrationEnabled(enabled);
+                if (!enabled) {
                     setTab('login');
                 }
             } catch {
@@ -138,10 +139,12 @@
                     ? h('div', { key: 'info', style: { marginBottom: 12, color: '#93c5fd', fontSize: 13, textAlign: 'center' } }, infoMessage)
                     : null,
 
-                h('div', { className: 'tabs', key: 'tabs' }, [
-                    h(TabButton, { id: 'login', key: 't1' }, 'Login'),
-                    registrationEnabled ? h(TabButton, { id: 'register', key: 't2' }, 'Register') : null,
-                ].filter(Boolean)),
+                registrationEnabled
+                    ? h('div', { className: 'tabs', key: 'tabs' }, [
+                        h(TabButton, { id: 'login', key: 't1' }, 'Login'),
+                        h(TabButton, { id: 'register', key: 't2' }, 'Register'),
+                    ])
+                    : null,
 
                 (tab === 'login' || !registrationEnabled)
                     ? h('form', { key: 'loginForm', onSubmit: handleLoginSubmit }, [
