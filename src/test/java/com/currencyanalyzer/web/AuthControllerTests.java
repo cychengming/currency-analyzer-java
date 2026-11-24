@@ -58,6 +58,13 @@ class AuthControllerTests {
             .andExpect(jsonPath("$.success").value(true))
             .andExpect(jsonPath("$.message").value("Registration successful"));
 
+        mockMvc.perform(post("/api/auth/register")
+                .contentType("application/json")
+                .content(credentials))
+            .andExpect(status().isConflict())
+            .andExpect(jsonPath("$.success").value(false))
+            .andExpect(jsonPath("$.error").value("Username already exists"));
+
         MvcResult login = mockMvc.perform(post("/api/auth/login")
                 .contentType("application/json")
                 .content(credentials))
@@ -96,7 +103,7 @@ class AuthControllerTests {
         mockMvc.perform(post("/api/auth/login")
                 .contentType("application/json")
                 .content(reserved))
-            .andExpect(status().isOk())
+            .andExpect(status().isUnauthorized())
             .andExpect(jsonPath("$.success").value(false));
     }
 }
