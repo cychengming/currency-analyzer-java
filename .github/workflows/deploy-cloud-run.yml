@@ -115,6 +115,11 @@ jobs:
             AI_DAILY_TOKEN_LIMIT=200000
             AI_EMBEDDING_MODEL_URI=file:/app/models/embeddings/model_quantized.onnx
             AI_EMBEDDING_TOKENIZER_URI=file:/app/models/embeddings/tokenizer.json
+            PUBSUB_ENABLED=${{ vars.PUBSUB_ENABLED || 'false' }}
+            PUBSUB_PUSH_AUDIENCE=${{ vars.PUBSUB_PUSH_AUDIENCE || '' }}
+            PUBSUB_PUSH_SERVICE_ACCOUNT=pubsub-invoker@${{ env.GCP_PROJECT_ID }}.iam.gserviceaccount.com
+            PUBSUB_ALERTS_TOPIC=${{ vars.PUBSUB_ALERTS_TOPIC || '' }}
+            ALERT_COOLDOWN_SECONDS=${{ vars.ALERT_COOLDOWN_SECONDS || '3600' }}
 
       - name: Verify readiness probe
         env:

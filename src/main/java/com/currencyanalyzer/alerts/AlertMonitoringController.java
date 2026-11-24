@@ -22,13 +22,16 @@ public class AlertMonitoringController {
     private static final String KEY_ACTIVE = "active";
 
     private final AlertMonitoringService service;
+    private final AlertNotificationService notificationService;
     private final KnowledgeAdminService knowledgeAdminService;
 
     public AlertMonitoringController(
         AlertMonitoringService service,
+        AlertNotificationService notificationService,
         KnowledgeAdminService knowledgeAdminService
     ) {
         this.service = service;
+        this.notificationService = notificationService;
         this.knowledgeAdminService = knowledgeAdminService;
     }
 
@@ -96,6 +99,12 @@ public class AlertMonitoringController {
         requireAdmin(authentication);
         service.saveSettings(payload);
         return Map.of(KEY_SUCCESS, true);
+    }
+
+    @PostMapping("/test-email")
+    public Map<String, Object> sendTestEmail(Authentication authentication) {
+        requireAdmin(authentication);
+        return notificationService.sendTestNotification();
     }
 
     private void requireAdmin(Authentication authentication) {

@@ -2,6 +2,7 @@ package com.currencyanalyzer.web;
 
 import com.currencyanalyzer.ai.chat.AiResponseInProgressException;
 import com.currencyanalyzer.ai.chat.AiUsageLimitException;
+import com.currencyanalyzer.alerts.AlertDeliveryException;
 import com.currencyanalyzer.storage.StorageException;
 import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
@@ -86,6 +87,18 @@ public class ApiExceptionHandler {
         return ResponseEntity.status(HttpStatus.BAD_GATEWAY).body(Map.of(
             "success", false,
             "error", exception.getMessage() == null ? "Storage operation failed" : exception.getMessage()
+        ));
+    }
+
+    @ExceptionHandler(AlertDeliveryException.class)
+    public ResponseEntity<Map<String, Object>> alertDeliveryError(
+        AlertDeliveryException exception,
+        HttpServletRequest request
+    ) {
+        log.warn("Alert notification delivery failed for {}: {}", request.getRequestURI(), exception.getMessage());
+        return ResponseEntity.status(HttpStatus.BAD_GATEWAY).body(Map.of(
+            "success", false,
+            "error", exception.getMessage() == null ? "Alert delivery failed" : exception.getMessage()
         ));
     }
 

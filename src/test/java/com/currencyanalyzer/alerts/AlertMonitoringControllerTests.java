@@ -75,6 +75,11 @@ class AlertMonitoringControllerTests {
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"pair\":\"EUR/USD\",\"enabled\":false,\"alert_type\":\"percentage_change\"}"))
             .andExpect(status().isForbidden());
+        mockMvc.perform(post("/api/test-email").session(bob).with(csrf()))
+            .andExpect(status().isForbidden());
+        mockMvc.perform(post("/api/test-email").session(alice).with(csrf()))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.success").value(false));
 
         mockMvc.perform(post("/api/monitoring/start").session(alice).with(csrf()))
             .andExpect(status().isOk())
