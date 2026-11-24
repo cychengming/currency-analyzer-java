@@ -36,7 +36,7 @@ public class WebSecurityConfig {
     ) throws Exception {
         http
             .securityMatcher("/internal/pubsub/**")
-            .csrf(csrf -> csrf.disable())
+            .csrf(csrf -> csrf.ignoringRequestMatchers("/internal/pubsub/**"))
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .addFilterBefore(
                 new PubSubAuthenticationFilter(oidcVerifier),

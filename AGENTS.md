@@ -26,6 +26,7 @@
 - Avoid backtracking-prone regexes such as `(.+?)\s*$` (`java:S8786`); prefer simple string trimming/slicing.
 - Use Spring Boot 4 / Spring 7 status constants (e.g., `HttpStatus.CONTENT_TOO_LARGE`, not deprecated `HttpStatus.PAYLOAD_TOO_LARGE`).
 - Never return `ResponseEntity.ok(...)` (`2xx`) inside a `catch` block (`java:S6863`); return a matching error status (`400`, `401`, `409`, `502`, etc.) or let `ApiExceptionHandler` map the exception.
+- Never call `csrf.disable()` in `WebSecurityConfig` (triggers Sonar `java:S4502`); scope stateless Bearer-authenticated routes explicitly with `.csrf(csrf -> csrf.ignoringRequestMatchers(...))`.
 - In tests, avoid self-comparisons (`assertEquals(x, x)`, `java:S5863`) and dissimilar-type `assertNotEquals` (`java:S5845`).
 
 ## Pull Request & CI Monitoring
