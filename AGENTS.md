@@ -25,7 +25,13 @@
 - For any Java `record` containing array fields (`byte[]`, `float[]`, etc.), explicitly override `equals`, `hashCode`, and `toString` using `Arrays.equals` / `Arrays.hashCode` (`java:S6218`).
 - Avoid backtracking-prone regexes such as `(.+?)\s*$` (`java:S8786`); prefer simple string trimming/slicing.
 - Use Spring Boot 4 / Spring 7 status constants (e.g., `HttpStatus.CONTENT_TOO_LARGE`, not deprecated `HttpStatus.PAYLOAD_TOO_LARGE`).
+- Never return `ResponseEntity.ok(...)` (`2xx`) inside a `catch` block (`java:S6863`); return a matching error status (`400`, `401`, `409`, `502`, etc.) or let `ApiExceptionHandler` map the exception.
+- Never call `csrf.disable()` globally in `WebSecurityConfig` (triggers Sonar `java:S4502`); for strictly stateless Bearer-authenticated chains (no session cookies), scope `.csrf(csrf -> csrf.ignoringRequestMatchers(...))` and document `@SuppressWarnings("java:S4502")` on the chain bean.
 - In tests, avoid self-comparisons (`assertEquals(x, x)`, `java:S5863`) and dissimilar-type `assertNotEquals` (`java:S5845`).
+
+## Pull Request & CI Monitoring
+- After creating or updating any Pull Request (via `gh pr create` or pushing commits to an open PR branch), always monitor all PR checks (`gh pr checks <pr>`) until every check (`verify`, `SonarCloud Code Analysis`, `qodana`) finishes.
+- Do not stop and ask the user whether to check CI — proactively inspect failing workflow logs (`gh run view <run-id> --log-failed`) and SonarCloud issues, fix all CI/test/Sonar/Qodana failures on the PR branch, push the fix, and continue monitoring until every check passes green.
 
 ## Runtime & UI Hygiene
 - Respect `HTTPS_PROXY` / `HTTP_PROXY` explicitly in Google Cloud SDK HTTP transports so OAuth2/GCS calls work behind local proxies.

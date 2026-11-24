@@ -143,17 +143,23 @@ public class AlertMonitoringService {
     }
 
     public Map<String, Map<String, Object>> getAlertPreferences() {
-        Map<String, AlertPreference> stored = repository.findAllAlertPreferences();
         Map<String, Map<String, Object>> result = new LinkedHashMap<>();
-
-        for (String pair : marketDataService.configuredPairs()) {
-            AlertPreference existing = stored.get(pair);
-            result.put(pair, existing == null ? defaultPreferenceMap(pair) : toPreferenceMap(existing));
-        }
-        for (Map.Entry<String, AlertPreference> entry : stored.entrySet()) {
-            result.putIfAbsent(entry.getKey(), toPreferenceMap(entry.getValue()));
+        for (AlertPreference preference : getEffectivePreferences()) {
+            result.put(preference.pair(), toPreferenceMap(preference));
         }
         return Collections.unmodifiableMap(result);
+    }
+
+    public List<AlertPreference> getEffectivePreferences() {
+        Map<String, AlertPreference> stored = repository.findAllAlertPreferences();
+        Map<String, AlertPreference> ordered = new LinkedHashMap<>();
+        for (String pair : marketDataService.configuredPairs()) {
+            ordered.put(pair, stored.getOrDefault(pair, defaultPreference(pair)));
+        }
+        for (Map.Entry<String, AlertPreference> entry : stored.entrySet()) {
+            ordered.putIfAbsent(entry.getKey(), entry.getValue());
+        }
+        return List.copyOf(ordered.values());
     }
 
     public void saveAlertPreference(Map<String, Object> payload) {
@@ -213,10 +219,6 @@ public class AlertMonitoringService {
             50,
             DEFAULT_SIGNAL_TYPE
         );
-    }
-
-    private static Map<String, Object> defaultPreferenceMap(String pair) {
-        return toPreferenceMap(defaultPreference(pair));
     }
 
     private static Map<String, Object> toPreferenceMap(AlertPreference preference) {

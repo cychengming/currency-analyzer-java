@@ -92,6 +92,4 @@ Before pushing, scan modified files for the project's recurring static-analysis 
 
 ## Step 4: Post-Push CI Verification
 
-After pushing to the PR branch (only when requested by the user), monitor all GitHub PR
-check runs (`verify`, `SonarCloud Code Analysis`, `qodana`) until every check reaches
-`completed` + `success`.
+After creating or pushing to any PR branch, automatically monitor all GitHub PR check runs (`gh pr checks <pr>` — `verify`, `SonarCloud Code Analysis`, `qodana`) until every check finishes. If any check fails, inspect the logs (`gh run view <run-id> --log-failed`) and SonarCloud issues, fix them on the PR branch, push, and re-verify until every check reaches `completed` + `success`.

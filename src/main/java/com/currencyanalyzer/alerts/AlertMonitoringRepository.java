@@ -3,12 +3,16 @@ package com.currencyanalyzer.alerts;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.jdbc.support.GeneratedKeyHolder;
+import org.springframework.jdbc.support.KeyHolder;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.time.Instant;
 import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -34,6 +38,112 @@ public class AlertMonitoringRepository {
             .param(limit)
             .query((rs, rowNum) -> mapAlert(rs))
             .list();
+    }
+
+    public Optional<AlertEntry> findAlertById(long id) {
+        return jdbcClient.sql("""
+                SELECT id, pair, percent_change, old_rate, new_rate, timestamp,
+                       email_sent, alert_type, trigger_value, threshold_value
+                FROM alerts
+                WHERE id = ?
+                """)
+            .param(id)
+            .query((rs, rowNum) -> mapAlert(rs))
+            .optional();
+    }
+
+    @Transactional
+    public AlertEntry insertAlert(
+        String pair,
+        double percentChange,
+        double oldRate,
+        double newRate,
+        Instant timestamp,
+        String alertType,
+        double triggerValue,
+        double thresholdValue
+    ) {
+        OffsetDateTime ts = OffsetDateTime.ofInstant(timestamp, ZoneOffset.UTC);
+        KeyHolder keyHolder = new GeneratedKeyHolder();
+        jdbcClient.sql("""
+                INSERT INTO alerts (
+                    pair, percent_change, old_rate, new_rate, timestamp,
+                    email_sent, alert_type, trigger_value, threshold_value
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """)
+            .param(pair)
+            .param(percentChange)
+            .param(oldRate)
+            .param(newRate)
+            .param(ts)
+            .param(false)
+            .param(alertType)
+            .param(triggerValue)
+            .param(thresholdValue)
+            .update(keyHolder, "id");
+
+        Number key = keyHolder.getKey();
+        if (key == null) {
+            throw new IllegalStateException("Inserted alert did not return a generated id");
+        }
+        return new AlertEntry(
+            key.longValue(),
+            pair,
+            percentChange,
+            oldRate,
+            newRate,
+            timestamp.toString(),
+            false,
+            alertType,
+            triggerValue,
+            thresholdValue
+        );
+    }
+
+    @Transactional
+    public boolean markAlertDelivered(long id) {
+        int updated = jdbcClient.sql("""
+                UPDATE alerts
+                SET email_sent = TRUE
+                WHERE id = ? AND email_sent = FALSE
+                """)
+            .param(id)
+            .update();
+        return updated > 0;
+    }
+
+    @Transactional
+    public boolean claimCooldownWindow(String pair, Instant now, Instant cutoff) {
+        OffsetDateTime nowTs = OffsetDateTime.ofInstant(now, ZoneOffset.UTC);
+        OffsetDateTime cutoffTs = OffsetDateTime.ofInstant(cutoff, ZoneOffset.UTC);
+        int updated = jdbcClient.sql("""
+                UPDATE monitoring_state
+                SET last_alert_time = ?
+                WHERE pair = ? AND (last_alert_time IS NULL OR last_alert_time <= ?)
+                """)
+            .param(nowTs)
+            .param(pair)
+            .param(cutoffTs)
+            .update();
+        if (updated > 0) {
+            return true;
+        }
+        boolean exists = jdbcClient.sql("SELECT EXISTS (SELECT 1 FROM monitoring_state WHERE pair = ?)")
+            .param(pair)
+            .query(Boolean.class)
+            .single();
+        if (exists) {
+            return false;
+        }
+        try {
+            jdbcClient.sql("INSERT INTO monitoring_state (pair, last_alert_time) VALUES (?, ?)")
+                .param(pair)
+                .param(nowTs)
+                .update();
+            return true;
+        } catch (DuplicateKeyException ignored) {
+            return false;
+        }
     }
 
     @Transactional

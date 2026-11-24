@@ -1925,6 +1925,14 @@ async function fetchAlerts() {
     }
 }
 
+function formatAlertPercentChange(value) {
+    const num = Number(value);
+    if (!Number.isFinite(num)) {
+        return '0.00%';
+    }
+    return `${num >= 0 ? '+' : ''}${num.toFixed(2)}%`;
+}
+
 function renderAlerts(alerts) {
     const recentAlerts = document.getElementById('recentAlerts');
     const alertHistory = document.getElementById('alertHistory');
@@ -1935,12 +1943,12 @@ function renderAlerts(alerts) {
             <div class="alert-item">
                 <div class="alert-header">
                     <span class="alert-pair">${alert.pair}</span>
-                    <span class="alert-change">+${alert.percent_change}%</span>
+                    <span class="alert-change">${formatAlertPercentChange(alert.percent_change)}</span>
                 </div>
                 <div style="font-size: 14px; color: #cbd5e1;">
                     ${alert.old_rate} → ${alert.new_rate}
                 </div>
-                <div class="alert-time">${new Date(alert.timestamp).toLocaleString()}</div>
+                <div class="alert-time">${new Date(alert.timestamp).toLocaleString('en-US')}</div>
             </div>
         `).join('');
 
@@ -1951,10 +1959,10 @@ function renderAlerts(alerts) {
                 <div class="alert-item">
                     <div class="alert-header">
                         <span class="alert-pair">${alert.pair}</span>
-                        <span class="alert-change">+${alert.percent_change}%</span>
+                        <span class="alert-change">${formatAlertPercentChange(alert.percent_change)}</span>
                     </div>
                     <div style="font-size: 12px; color: #94a3b8;">
-                        ${new Date(alert.timestamp).toLocaleString()}
+                        ${new Date(alert.timestamp).toLocaleString('en-US')}
                     </div>
                 </div>
             `).join('');

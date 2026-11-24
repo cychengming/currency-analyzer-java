@@ -107,6 +107,18 @@ app:
     chunk-overlap-chars: ${RAG_CHUNK_OVERLAP_CHARS:80}
     max-chunks-per-document: ${RAG_MAX_CHUNKS_PER_DOC:500}
     similarity-threshold: ${RAG_SIMILARITY_THRESHOLD:0.45}
+  pubsub:
+    enabled: ${PUBSUB_ENABLED:false}
+    project-id: ${GCP_PROJECT_ID:project-3806d7a4-0bd7-416f-8c4}
+    push-audience: ${PUBSUB_PUSH_AUDIENCE:}
+    push-service-account: ${PUBSUB_PUSH_SERVICE_ACCOUNT:}
+    alerts-topic: ${PUBSUB_ALERTS_TOPIC:}
+    alert-cooldown-seconds: ${ALERT_COOLDOWN_SECONDS:3600}
+    credentials-path: ${GCP_CREDENTIALS_PATH:}
+  alerts:
+    webhook-url: ${ALERT_WEBHOOK_URL:}
+    resend-api-key: ${RESEND_API_KEY:}
+    resend-from-email: ${RESEND_FROM_EMAIL:onboarding@resend.dev}
 
 logging:
   level:

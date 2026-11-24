@@ -1,14 +1,18 @@
 package com.currencyanalyzer.config;
 
+import com.currencyanalyzer.pubsub.PubSubAuthenticationFilter;
+import com.currencyanalyzer.pubsub.PubSubOidcVerifier;
 import jakarta.servlet.DispatcherType;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication;
+import org.springframework.core.annotation.Order;
 import org.springframework.http.MediaType;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 import org.springframework.security.web.csrf.CookieCsrfTokenRepository;
 import org.springframework.security.web.csrf.CsrfTokenRequestAttributeHandler;
 import org.springframework.security.web.csrf.CsrfTokenRepository;
@@ -25,6 +29,40 @@ public class WebSecurityConfig {
     }
 
     @Bean
+    @Order(1)
+    @SuppressWarnings("java:S4502") // Stateless Google OIDC Bearer JWT push endpoints; session cookies are never used
+    SecurityFilterChain pubsubSecurityFilterChain(
+        HttpSecurity http,
+        PubSubOidcVerifier oidcVerifier
+    ) throws Exception {
+        http
+            .securityMatcher("/internal/pubsub/**")
+            .csrf(csrf -> csrf.ignoringRequestMatchers("/internal/pubsub/**"))
+            .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+            .addFilterBefore(
+                new PubSubAuthenticationFilter(oidcVerifier),
+                UsernamePasswordAuthenticationFilter.class
+            )
+            .authorizeHttpRequests(authorize -> authorize
+                .anyRequest().hasAuthority(PubSubAuthenticationFilter.AUTHORITY_PUBSUB_PUSH)
+            )
+            .formLogin(form -> form.disable())
+            .httpBasic(basic -> basic.disable())
+            .logout(logout -> logout.disable())
+            .exceptionHandling(errors -> errors
+                .authenticationEntryPoint((request, response, exception) ->
+                    writeJson(response, HttpServletResponse.SC_FORBIDDEN,
+                        "{\"success\":false,\"error\":\"Forbidden\"}"))
+                .accessDeniedHandler((request, response, exception) ->
+                    writeJson(response, HttpServletResponse.SC_FORBIDDEN,
+                        "{\"success\":false,\"error\":\"Forbidden\"}"))
+            );
+
+        return http.build();
+    }
+
+    @Bean
+    @Order(2)
     SecurityFilterChain securityFilterChain(
         HttpSecurity http,
         CsrfTokenRepository csrfTokenRepository
