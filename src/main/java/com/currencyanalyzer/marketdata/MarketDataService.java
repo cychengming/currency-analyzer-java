@@ -125,6 +125,10 @@ public class MarketDataService {
             .build();
     }
 
+    public List<String> configuredPairs() {
+        return configuredPairs;
+    }
+
     public Map<String, LiveRate> fetchLiveRates() {
         return liveRateCache.get(this::loadLiveRates);
     }
@@ -480,21 +484,57 @@ public class MarketDataService {
                 current = closes.getLast();
             }
 
-            Double previous = positiveNumber(meta.path("chartPreviousClose"));
-            if (previous == null) {
-                previous = positiveNumber(meta.path("previousClose"));
-            }
-            if (previous == null) {
-                previous = closes.size() >= 2 ? closes.get(closes.size() - 2) : current;
-            }
-
-            double change = current - previous;
-            double percent = previous == 0 ? 0 : change / previous * 100;
-            return Optional.of(new LiveRate(round4(current), round4(change), round2(percent)));
+            return Optional.of(resolveYahooLiveRate(meta, closes, current));
         } catch (RuntimeException exception) {
             log.warn("Unable to fetch Yahoo live quote for {}: {}", symbol, rootMessage(exception));
             return Optional.empty();
         }
+    }
+
+    private static LiveRate resolveYahooLiveRate(JsonNode meta, List<Double> closes, double current) {
+        Double fulldayChange = finiteNumber(meta.path("fulldayChange"));
+        if (fulldayChange != null) {
+            double change = fulldayChange;
+            Double percent = resolvePercent(meta, current, change);
+            return new LiveRate(round4(current), round4(change), round2(percent));
+        }
+
+        Double marketChangePercent = finiteNumber(meta.path("regularMarketChangePercent"));
+        if (marketChangePercent != null) {
+            double percent = marketChangePercent;
+            double divisor = 1.0 + percent / 100.0;
+            double change = divisor > 0 ? current - (current / divisor) : 0.0;
+            return new LiveRate(round4(current), round4(change), round2(percent));
+        }
+
+        double previous = resolvePreviousClose(meta, closes, current);
+        double change = current - previous;
+        double percent = previous == 0 ? 0.0 : change / previous * 100.0;
+        return new LiveRate(round4(current), round4(change), round2(percent));
+    }
+
+    private static double resolvePercent(JsonNode meta, double current, double change) {
+        Double percent = finiteNumber(meta.path("fulldayChangePercent"));
+        if (percent == null) {
+            percent = finiteNumber(meta.path("regularMarketChangePercent"));
+        }
+        if (percent != null) {
+            return percent;
+        }
+        double prior = current - change;
+        return prior > 0 ? change / prior * 100.0 : 0.0;
+    }
+
+    private static double resolvePreviousClose(JsonNode meta, List<Double> closes, double current) {
+        Double previous = positiveNumber(meta.path("previousClose"));
+        if (previous != null) {
+            return previous;
+        }
+        if (closes.size() >= 2) {
+            return closes.get(closes.size() - 2);
+        }
+        previous = positiveNumber(meta.path("chartPreviousClose"));
+        return previous != null ? previous : current;
     }
 
     private static List<Double> extractValidCloses(JsonNode result) {
@@ -512,11 +552,16 @@ public class MarketDataService {
     }
 
     private static Double positiveNumber(JsonNode node) {
+        Double value = finiteNumber(node);
+        return value != null && value > 0 ? value : null;
+    }
+
+    private static Double finiteNumber(JsonNode node) {
         if (!node.isNumber()) {
             return null;
         }
         double value = node.asDouble();
-        return Double.isFinite(value) && value > 0 ? value : null;
+        return Double.isFinite(value) ? value : null;
     }
 
     private JsonNode getJson(String uriTemplate, Object... variables) {
