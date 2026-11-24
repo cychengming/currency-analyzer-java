@@ -46,7 +46,7 @@ jobs:
       AR_REPO: currency-analyzer
       CLOUD_SQL_CONNECTION_NAME: ${{ vars.CLOUD_SQL_CONNECTION_NAME || 'project-3806d7a4-0bd7-416f-8c4:us-west1:currency-analyzer' }}
       SERVICE_NAME: currency-analyzer-java
-      PREBAKE_MODEL: ${{ inputs.prebake_embedding_model == false && 'false' || 'true' }}
+      PREBAKE_MODEL: ${{ github.event_name == 'workflow_dispatch' && inputs.prebake_embedding_model == false && 'false' || 'true' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -95,7 +95,6 @@ jobs:
             --min-instances=0
             --max-instances=1
             --no-cpu-throttling
-            --allow-unauthenticated
           secrets: |
             DATABASE_PASSWORD=currency-db-password:latest
             DEEPSEEK_API_KEY=currency-deepseek-api-key:latest
@@ -104,6 +103,7 @@ jobs:
             DATABASE_USERNAME=currency
             DATABASE_POOL_SIZE=5
             SESSION_COOKIE_SECURE=true
+            AUTH_REGISTRATION_ENABLED=${{ vars.AUTH_REGISTRATION_ENABLED || 'false' }}
             STORAGE_PROVIDER=gcs
             GCP_PROJECT_ID=${{ env.GCP_PROJECT_ID }}
             GCP_STORAGE_BUCKET=${{ env.GCP_STORAGE_BUCKET }}

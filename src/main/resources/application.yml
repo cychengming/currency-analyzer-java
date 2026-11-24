@@ -58,6 +58,10 @@ management:
       application: ${spring.application.name}
 
 app:
+  auth:
+    registration-enabled: ${AUTH_REGISTRATION_ENABLED:true}
+    login-max-attempts: ${AUTH_LOGIN_MAX_ATTEMPTS:10}
+    login-window-seconds: ${AUTH_LOGIN_WINDOW_SECONDS:900}
   ai:
     enabled: ${AI_ASSISTANT_ENABLED:false}
     provider: deepseek
