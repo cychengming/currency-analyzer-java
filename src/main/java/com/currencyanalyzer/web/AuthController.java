@@ -100,14 +100,14 @@ public class AuthController {
             return ResponseEntity.ok(failure("This username is reserved and cannot be registered"));
         }
         if (userRepository.existsByUsername(username)) {
-            return ResponseEntity.ok(failure("Username already exists"));
+            return ResponseEntity.status(HttpStatus.CONFLICT).body(failure("Username already exists"));
         }
 
         try {
             userRepository.create(username, passwordEncoder.encode(password));
             return ResponseEntity.ok(Map.of("success", true, "message", "Registration successful"));
         } catch (DuplicateKeyException exception) {
-            return ResponseEntity.ok(failure("Username already exists"));
+            return ResponseEntity.status(HttpStatus.CONFLICT).body(failure("Username already exists"));
         }
     }
 
@@ -143,7 +143,7 @@ public class AuthController {
         } catch (BadCredentialsException exception) {
             loginAttemptLimiter.recordFailure(clientKey);
             log.info("Login failed for username={}", username);
-            return ResponseEntity.ok(failure("Invalid username or password"));
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(failure("Invalid username or password"));
         }
     }
 

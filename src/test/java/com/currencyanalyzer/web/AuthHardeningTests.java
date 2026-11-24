@@ -53,7 +53,7 @@ class AuthHardeningTests {
             mockMvc.perform(post("/api/auth/login")
                     .contentType("application/json")
                     .content(badCredentials))
-                .andExpect(status().isOk())
+                .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.success").value(false));
         }
 
