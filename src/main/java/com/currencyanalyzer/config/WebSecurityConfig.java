@@ -30,6 +30,7 @@ public class WebSecurityConfig {
 
     @Bean
     @Order(1)
+    @SuppressWarnings("java:S4502") // Stateless Google OIDC Bearer JWT push endpoints; session cookies are never used
     SecurityFilterChain pubsubSecurityFilterChain(
         HttpSecurity http,
         PubSubOidcVerifier oidcVerifier
