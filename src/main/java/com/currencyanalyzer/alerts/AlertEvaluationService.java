@@ -2,6 +2,8 @@ package com.currencyanalyzer.alerts;
 
 import com.currencyanalyzer.alerts.AlertMonitoringRepository.AlertEntry;
 import com.currencyanalyzer.alerts.AlertMonitoringRepository.AlertPreference;
+import com.currencyanalyzer.alerts.UserAlertRuleRepository.AlertRule;
+import com.currencyanalyzer.alerts.UserAlertRuleRepository.UserAlertEntry;
 import com.currencyanalyzer.marketdata.HistoricalPoint;
 import com.currencyanalyzer.marketdata.LiveRate;
 import com.currencyanalyzer.marketdata.MarketDataService;
@@ -9,6 +11,7 @@ import com.currencyanalyzer.pubsub.AlertEventPublisher;
 import com.currencyanalyzer.pubsub.AlertTriggeredEvent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
@@ -31,14 +34,17 @@ public class AlertEvaluationService {
     private static final long MIN_COOLDOWN_SECONDS = 60L;
 
     private final AlertMonitoringRepository repository;
+    private final UserAlertRuleRepository userRuleRepository;
     private final AlertMonitoringService monitoringService;
     private final MarketDataService marketDataService;
     private final AlertEventPublisher eventPublisher;
     private final Clock clock;
     private final long alertCooldownSeconds;
 
+    @Autowired
     public AlertEvaluationService(
         AlertMonitoringRepository repository,
+        UserAlertRuleRepository userRuleRepository,
         AlertMonitoringService monitoringService,
         MarketDataService marketDataService,
         AlertEventPublisher eventPublisher,
@@ -46,11 +52,23 @@ public class AlertEvaluationService {
         @Value("${app.pubsub.alert-cooldown-seconds:3600}") long alertCooldownSeconds
     ) {
         this.repository = repository;
+        this.userRuleRepository = userRuleRepository;
         this.monitoringService = monitoringService;
         this.marketDataService = marketDataService;
         this.eventPublisher = eventPublisher;
         this.clock = clock;
         this.alertCooldownSeconds = Math.max(MIN_COOLDOWN_SECONDS, alertCooldownSeconds);
+    }
+
+    AlertEvaluationService(
+        AlertMonitoringRepository repository,
+        AlertMonitoringService monitoringService,
+        MarketDataService marketDataService,
+        AlertEventPublisher eventPublisher,
+        Clock clock,
+        long alertCooldownSeconds
+    ) {
+        this(repository, null, monitoringService, marketDataService, eventPublisher, clock, alertCooldownSeconds);
     }
 
     public EvaluationSummary evaluateTick() {
@@ -62,9 +80,16 @@ public class AlertEvaluationService {
             return new EvaluationSummary(STATUS_SKIPPED, "alerts_disabled", 0, 0, List.of());
         }
 
+        Map<String, LiveRate> liveRates = marketDataService.fetchLiveRates();
+        if (userRuleRepository != null && userRuleRepository.countAllRules() > 0) {
+            return evaluateUserRules(liveRates);
+        }
+        return evaluateLegacyPreferences(settings, liveRates);
+    }
+
+    private EvaluationSummary evaluateLegacyPreferences(Map<String, Object> settings, Map<String, LiveRate> liveRates) {
         double defaultThreshold = ((Number) settings.get("trend_threshold")).doubleValue();
         int defaultPeriod = ((Number) settings.get("detection_period")).intValue();
-        Map<String, LiveRate> liveRates = marketDataService.fetchLiveRates();
 
         int evaluated = 0;
         List<AlertEntry> triggered = new ArrayList<>();
@@ -84,6 +109,135 @@ public class AlertEvaluationService {
 
         log.info("Monitoring tick evaluated={} triggered={}", evaluated, triggered.size());
         return new EvaluationSummary("ok", null, evaluated, triggered.size(), List.copyOf(triggered));
+    }
+
+    private EvaluationSummary evaluateUserRules(Map<String, LiveRate> liveRates) {
+        Instant now = clock.instant();
+        int evaluated = 0;
+        List<AlertEntry> triggered = new ArrayList<>();
+        for (AlertRule rule : userRuleRepository.findAllArmedRules()) {
+            LiveRate liveRate = liveRates.get(rule.pair());
+            if (liveRate == null || liveRate.rate() <= 0) {
+                continue;
+            }
+            evaluated++;
+            evaluateSingleUserRule(rule, liveRate, now).ifPresent(triggered::add);
+        }
+
+        log.info("Monitoring tick (v2 rules) evaluated={} triggered={}", evaluated, triggered.size());
+        return new EvaluationSummary("ok", null, evaluated, triggered.size(), List.copyOf(triggered));
+    }
+
+    private Optional<AlertEntry> evaluateSingleUserRule(AlertRule rule, LiveRate liveRate, Instant now) {
+        Optional<RuleMatch> matchOpt = matchUserRule(rule, liveRate);
+        if (matchOpt.isEmpty()) {
+            userRuleRepository.updateLastEvaluatedRate(rule.id(), liveRate.rate(), now);
+            return Optional.empty();
+        }
+
+        boolean claimed = claimUserRuleTrigger(rule, liveRate.rate(), now);
+        if (!claimed) {
+            userRuleRepository.updateLastEvaluatedRate(rule.id(), liveRate.rate(), now);
+            return Optional.empty();
+        }
+
+        RuleMatch match = matchOpt.get();
+        UserAlertEntry saved = userRuleRepository.insertUserAlert(
+            rule.userId(),
+            rule.id(),
+            rule.nickname(),
+            rule.pair(),
+            round2(match.percentChange()),
+            round4(match.oldRate()),
+            round4(match.newRate()),
+            now,
+            rule.conditionType(),
+            round4(match.triggerValue()),
+            round4(match.thresholdValue())
+        );
+
+        try {
+            eventPublisher.publish(AlertTriggeredEvent.from(saved, rule.notifyEmail()));
+        } catch (RuntimeException exception) {
+            log.warn("User alert {} saved for rule {} ({}) but Pub/Sub publish failed: {}",
+                saved.id(), rule.id(), rule.pair(), exception.getMessage());
+        }
+
+        return Optional.of(new AlertEntry(
+            saved.id(),
+            saved.pair(),
+            saved.percentChange(),
+            saved.oldRate(),
+            saved.newRate(),
+            saved.timestamp(),
+            saved.emailSent(),
+            saved.alertType(),
+            saved.triggerValue(),
+            saved.thresholdValue()
+        ));
+    }
+
+    private boolean claimUserRuleTrigger(AlertRule rule, double currentRate, Instant now) {
+        if (UserAlertRuleRepository.FREQ_ONCE.equals(rule.frequency())) {
+            return userRuleRepository.claimOnceTrigger(rule.id(), currentRate, now);
+        }
+        Instant cutoff = now.minusSeconds(Math.max(MIN_COOLDOWN_SECONDS, rule.cooldownSeconds()));
+        return userRuleRepository.claimRecurringTrigger(rule.id(), currentRate, now, cutoff);
+    }
+
+    private Optional<RuleMatch> matchUserRule(AlertRule rule, LiveRate liveRate) {
+        return switch (rule.conditionType()) {
+            case UserAlertRuleRepository.COND_CROSS_ABOVE -> evaluatePriceCrossing(rule, liveRate, true);
+            case UserAlertRuleRepository.COND_CROSS_BELOW -> evaluatePriceCrossing(rule, liveRate, false);
+            case UserAlertRuleRepository.COND_PCT_MOVE -> evaluateUserPercentMove(rule, liveRate);
+            case UserAlertRuleRepository.COND_MA_CROSSOVER -> evaluateMaCrossover(
+                rule.pair(), rule.maShortPeriod(), rule.maLongPeriod(), rule.signalType(), liveRate
+            );
+            default -> Optional.empty();
+        };
+    }
+
+    private Optional<RuleMatch> evaluatePriceCrossing(AlertRule rule, LiveRate liveRate, boolean above) {
+        Double target = rule.targetValue();
+        Double previous = rule.lastEvaluatedRate();
+        double current = liveRate.rate();
+        if (target == null || target <= 0 || previous == null || previous <= 0) {
+            return Optional.empty();
+        }
+        boolean crossed = above
+            ? (previous < target && current >= target)
+            : (previous > target && current <= target);
+        if (!crossed) {
+            return Optional.empty();
+        }
+        double pct = (current - previous) / previous * 100.0;
+        return Optional.of(new RuleMatch(pct, previous, current, current, target));
+    }
+
+    private Optional<RuleMatch> evaluateUserPercentMove(AlertRule rule, LiveRate liveRate) {
+        Double threshold = rule.targetValue();
+        if (threshold == null || threshold <= 0) {
+            return Optional.empty();
+        }
+        double current = liveRate.rate();
+        double oldRate;
+        if (rule.windowDays() <= 1) {
+            oldRate = current - liveRate.change();
+        } else {
+            List<HistoricalPoint> history = marketDataService.fetchHistorical(rule.pair(), rule.windowDays());
+            if (history.size() < 2) {
+                return Optional.empty();
+            }
+            oldRate = history.getFirst().rate();
+        }
+        if (oldRate <= 0) {
+            return Optional.empty();
+        }
+        double percentChange = (current - oldRate) / oldRate * 100.0;
+        if (Math.abs(percentChange) < threshold) {
+            return Optional.empty();
+        }
+        return Optional.of(new RuleMatch(percentChange, oldRate, current, Math.abs(percentChange), threshold));
     }
 
     private Optional<AlertEntry> persistAndPublish(String pair, String alertType, RuleMatch match) {
@@ -185,10 +339,26 @@ public class AlertEvaluationService {
     }
 
     private Optional<RuleMatch> evaluateMovingAverageCrossover(AlertPreference preference, LiveRate liveRate) {
-        int shortPeriod = Math.max(2, preference.maShortPeriod());
-        int longPeriod = Math.max(shortPeriod + 1, preference.maLongPeriod());
+        return evaluateMaCrossover(
+            preference.pair(),
+            preference.maShortPeriod(),
+            preference.maLongPeriod(),
+            preference.signalType(),
+            liveRate
+        );
+    }
 
-        List<HistoricalPoint> history = marketDataService.fetchHistorical(preference.pair(), longPeriod + 5);
+    private Optional<RuleMatch> evaluateMaCrossover(
+        String pair,
+        int rawShortPeriod,
+        int rawLongPeriod,
+        String rawSignalType,
+        LiveRate liveRate
+    ) {
+        int shortPeriod = Math.max(2, rawShortPeriod);
+        int longPeriod = Math.max(shortPeriod + 1, rawLongPeriod);
+
+        List<HistoricalPoint> history = marketDataService.fetchHistorical(pair, longPeriod + 5);
         List<Double> closes = new ArrayList<>(history.size() + 1);
         for (HistoricalPoint point : history) {
             if (point.rate() > 0) {
@@ -210,7 +380,7 @@ public class AlertEvaluationService {
 
         boolean goldenCross = prevShort <= prevLong && currShort > currLong;
         boolean deathCross = prevShort >= prevLong && currShort < currLong;
-        String signalType = preference.signalType() == null ? "both" : preference.signalType();
+        String signalType = rawSignalType == null ? "both" : rawSignalType;
 
         boolean matched = ("golden_cross".equals(signalType) && goldenCross)
             || ("death_cross".equals(signalType) && deathCross)
