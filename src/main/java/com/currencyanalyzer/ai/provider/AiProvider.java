@@ -87,16 +87,27 @@ public interface AiProvider {
         return ModelUsage.NONE;
     }
 
-    record Completion(String content, String reasoning, List<ToolCall> toolCalls, ModelUsage usage) {
-        public static final Completion NONE = new Completion(null, null, List.of(), ModelUsage.NONE);
+    record Completion(
+        String content,
+        String reasoning,
+        List<ToolCall> toolCalls,
+        ModelUsage usage,
+        String responseId
+    ) {
+        public static final Completion NONE = new Completion(null, null, List.of(), ModelUsage.NONE, null);
 
         public Completion(String content, String reasoning, List<ToolCall> toolCalls) {
-            this(content, reasoning, toolCalls, ModelUsage.NONE);
+            this(content, reasoning, toolCalls, ModelUsage.NONE, null);
+        }
+
+        public Completion(String content, String reasoning, List<ToolCall> toolCalls, ModelUsage usage) {
+            this(content, reasoning, toolCalls, usage, null);
         }
 
         public Completion {
             toolCalls = toolCalls == null ? List.of() : List.copyOf(toolCalls);
             usage = usage == null ? ModelUsage.NONE : usage;
+            responseId = responseId == null || responseId.isBlank() ? null : responseId.trim();
         }
 
         public boolean hasToolCalls() {

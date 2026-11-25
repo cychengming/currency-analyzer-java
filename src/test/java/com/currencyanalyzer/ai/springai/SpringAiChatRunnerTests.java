@@ -1,8 +1,10 @@
 package com.currencyanalyzer.ai.springai;
 
+import com.currencyanalyzer.ai.chat.AiMetrics;
 import com.currencyanalyzer.ai.provider.AiProviderException;
 import com.currencyanalyzer.ai.tools.AssistantTools;
 import com.currencyanalyzer.marketdata.MarketDataService;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
@@ -26,8 +28,10 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
@@ -222,6 +226,11 @@ class SpringAiChatRunnerTests {
                 }
 
                 @Override
+                public void onToolStarted(String name, String argumentsJson) {
+                    events.add("started:" + name + ":" + argumentsJson);
+                }
+
+                @Override
                 public void onToolFinished(String name, String argumentsJson, String result, int durationMs) {
                     events.add("finished:" + name);
                 }
@@ -229,17 +238,25 @@ class SpringAiChatRunnerTests {
             () -> false
         );
 
-        assertTrue(events.contains("started:get_live_rates"));
-        assertTrue(events.contains("started:get_settings"));
+        assertTrue(events.contains("started:get_live_rates:{}"));
+        assertTrue(events.contains("started:get_settings:{}"));
         assertTrue(events.contains("Quoted."));
     }
 
     @Test
     void recoversAndExecutesLeakedDsmlToolCallsWithoutStreamingMarkup() {
         LeakedDsmlChatModel model = new LeakedDsmlChatModel();
-        SpringAiChatRunner runner = runner(model);
+        SimpleMeterRegistry meterRegistry = new SimpleMeterRegistry();
+        SpringAiChatRunner runner = new SpringAiChatRunner(
+            provider(model),
+            marketTools(),
+            new AiMetrics(meterRegistry),
+            "deepseek-flash",
+            200
+        );
         List<String> events = new ArrayList<>();
         StringBuilder visible = new StringBuilder();
+        AtomicReference<String> capturedResponseId = new AtomicReference<>();
 
         runner.answer(
             "Be brief.",
@@ -247,7 +264,7 @@ class SpringAiChatRunnerTests {
                 new SpringAiChatRunner.PriorMessage(
                     "assistant",
                     "Earlier reply.\n<｜｜DSML｜｜ calls>\n<｜｜DSML｜｜ invoke name=\"get_live_rates\"></｜｜DSML｜｜ invoke>\n</｜｜DSML｜｜ calls>",
-                    null
+                    "Old historical reasoning that should be omitted"
                 ),
                 new SpringAiChatRunner.PriorMessage("user", "Check rates and settings now.", null)
             ),
@@ -270,6 +287,11 @@ class SpringAiChatRunnerTests {
                 public void onToolFinished(String name, String argumentsJson, String result, int durationMs) {
                     events.add("finished:" + name);
                 }
+
+                @Override
+                public void onResponseId(String responseId) {
+                    capturedResponseId.set(responseId);
+                }
             },
             () -> false
         );
@@ -280,7 +302,10 @@ class SpringAiChatRunnerTests {
         assertTrue(events.contains("finished:get_settings"));
         assertEquals("Live rates and settings loaded.", visible.toString());
         assertEquals("Earlier reply.", model.firstRoundPriorAssistantText);
+        assertNull(model.firstRoundPriorAssistantReasoning);
         assertEquals("auto", model.firstRoundToolChoice);
+        assertEquals("chatcmpl-dsml-2", capturedResponseId.get());
+        assertEquals(2.0, meterRegistry.get("currency_analyzer_ai_dsml_recoveries_total").counter().count());
     }
 
     @Test
@@ -590,6 +615,7 @@ class SpringAiChatRunnerTests {
     private static final class LeakedDsmlChatModel implements ChatModel {
         private int calls;
         private String firstRoundPriorAssistantText;
+        private String firstRoundPriorAssistantReasoning;
         private Object firstRoundToolChoice;
 
         @Override
@@ -601,15 +627,19 @@ class SpringAiChatRunnerTests {
         public Flux<ChatResponse> stream(Prompt prompt) {
             calls++;
             if (calls == 1) {
-                firstRoundPriorAssistantText = prompt.getInstructions().get(1).getText();
+                Message priorAssistant = prompt.getInstructions().get(1);
+                firstRoundPriorAssistantText = priorAssistant.getText();
+                if (priorAssistant instanceof DeepSeekAssistantMessage deepSeek) {
+                    firstRoundPriorAssistantReasoning = deepSeek.getReasoningContent();
+                }
                 firstRoundToolChoice = ((DeepSeekChatOptions) prompt.getOptions()).getToolChoice();
                 return Flux.just(
-                    textChunk("<｜"),
-                    textChunk("｜DSML｜｜ calls>\n<｜｜DSML｜｜ invoke name=\"get_live_rates\">\n</｜｜DSML｜｜ invoke>\n"),
-                    textChunk("<｜｜DSML｜｜ invoke name=\"get_settings\"></｜｜DSML｜｜ invoke>\n</｜｜DSML｜｜ calls>")
+                    textChunk("<｜", null),
+                    textChunk("｜DSML｜｜ calls>\n<｜｜DSML｜｜ invoke name=\"get_live_rates\">\n</｜｜DSML｜｜ invoke>\n", null),
+                    textChunk("<｜｜DSML｜｜ invoke name=\"get_settings\"></｜｜DSML｜｜ invoke>\n</｜｜DSML｜｜ calls>", "chatcmpl-dsml-1")
                 );
             }
-            return Flux.just(textChunk("Live rates and settings loaded."));
+            return Flux.just(textChunk("Live rates and settings loaded.", "chatcmpl-dsml-2"));
         }
 
         @Override
@@ -617,9 +647,13 @@ class SpringAiChatRunnerTests {
             return DeepSeekChatOptions.builder().model("deepseek-flash").build();
         }
 
-        private static ChatResponse textChunk(String text) {
+        private static ChatResponse textChunk(String text, String id) {
             DeepSeekAssistantMessage message = DeepSeekAssistantMessage.builder().content(text).build();
-            return new ChatResponse(List.of(new Generation(message)));
+            if (id == null) {
+                return new ChatResponse(List.of(new Generation(message)));
+            }
+            ChatResponseMetadata metadata = ChatResponseMetadata.builder().id(id).build();
+            return new ChatResponse(List.of(new Generation(message)), metadata);
         }
     }
 }

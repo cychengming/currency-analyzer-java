@@ -229,7 +229,8 @@ public class DeepSeekAiProvider implements AiProvider {
                 finishReason(choice)
             );
         }
-        return new Completion(content, reasoning, toolCalls, readUsage(root.path("usage")));
+        String responseId = textual(root.path("id"));
+        return new Completion(content, reasoning, toolCalls, readUsage(root.path("usage")), responseId);
     }
 
     private static Map<String, Object> messageBody(Turn message) {

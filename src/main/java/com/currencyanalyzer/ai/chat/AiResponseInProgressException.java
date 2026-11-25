@@ -5,4 +5,8 @@ public class AiResponseInProgressException extends RuntimeException {
     public AiResponseInProgressException() {
         super("A response is already in progress for this conversation");
     }
+
+    public AiResponseInProgressException(String message) {
+        super(message);
+    }
 }

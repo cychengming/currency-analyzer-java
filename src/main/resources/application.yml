@@ -69,9 +69,15 @@ app:
     max-input-chars: ${AI_MAX_INPUT_CHARS:8000}
     max-output-tokens: ${AI_MAX_OUTPUT_TOKENS:8192}
     request-timeout-seconds: ${AI_REQUEST_TIMEOUT_SECONDS:60}
+    max-concurrent-per-user: ${AI_MAX_CONCURRENT_PER_USER:2}
+    max-concurrent-global: ${AI_MAX_CONCURRENT_GLOBAL:32}
     usage:
       daily-request-limit: ${AI_DAILY_REQUEST_LIMIT:0}
       daily-token-limit: ${AI_DAILY_TOKEN_LIMIT:0}
+      daily-user-cost-limit-usd: ${AI_DAILY_USER_COST_LIMIT_USD:0}
+      daily-global-cost-limit-usd: ${AI_DAILY_GLOBAL_COST_LIMIT_USD:0}
+      input-cost-per-million-usd: ${AI_INPUT_COST_PER_MILLION_USD:0.27}
+      output-cost-per-million-usd: ${AI_OUTPUT_COST_PER_MILLION_USD:1.10}
     deepseek:
       base-url: ${DEEPSEEK_BASE_URL:https://api.deepseek.com}
       api-key: ${DEEPSEEK_API_KEY:}

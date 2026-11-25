@@ -113,6 +113,8 @@ jobs:
             AI_ASSISTANT_ENABLED=true
             AI_DAILY_REQUEST_LIMIT=100
             AI_DAILY_TOKEN_LIMIT=200000
+            AI_DAILY_GLOBAL_COST_LIMIT_USD=${{ vars.AI_DAILY_GLOBAL_COST_LIMIT_USD || '5.00' }}
+            AI_MAX_CONCURRENT_PER_USER=${{ vars.AI_MAX_CONCURRENT_PER_USER || '2' }}
             AI_EMBEDDING_MODEL_URI=file:/app/models/embeddings/model_quantized.onnx
             AI_EMBEDDING_TOKENIZER_URI=file:/app/models/embeddings/tokenizer.json
             PUBSUB_ENABLED=${{ vars.PUBSUB_ENABLED || 'false' }}

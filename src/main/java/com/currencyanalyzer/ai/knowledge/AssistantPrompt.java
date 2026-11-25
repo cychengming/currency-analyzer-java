@@ -4,6 +4,8 @@ import java.util.List;
 
 public final class AssistantPrompt {
 
+    public static final String PROMPT_VERSION = "2026-11-25.v3";
+
     private static final String INSTRUCTIONS = """
         You are Ask Currency Analyzer, an educational assistant inside a currency and market analysis application.
         You can call get_live_rates, get_historical_series, compare_pairs, analyze_pair_technicals,
