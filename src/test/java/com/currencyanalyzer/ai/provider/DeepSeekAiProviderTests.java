@@ -103,7 +103,7 @@ class DeepSeekAiProviderTests {
         server.createContext("/chat/completions", exchange -> {
             requestBody.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
             byte[] response = """
-                {"choices":[{"message":{"role":"assistant","content":null,"tool_calls":[
+                {"id":"cmpl-99","choices":[{"message":{"role":"assistant","content":null,"tool_calls":[
                   {"id":"call-1","type":"function","function":{"name":"get_live_rates","arguments":"{}"}}
                 ]}}],"usage":{"prompt_tokens":20,"completion_tokens":6}}
                 """.getBytes(StandardCharsets.UTF_8);
@@ -136,6 +136,7 @@ class DeepSeekAiProviderTests {
             assertEquals("call-1", completion.toolCalls().getFirst().id());
             assertEquals("get_live_rates", completion.toolCalls().getFirst().name());
             assertEquals("{}", completion.toolCalls().getFirst().argumentsJson());
+            assertEquals("cmpl-99", completion.responseId());
             assertEquals(20, completion.usage().inputTokens());
             assertEquals(6, completion.usage().outputTokens());
         } finally {

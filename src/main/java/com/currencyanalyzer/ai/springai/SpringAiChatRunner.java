@@ -1,5 +1,6 @@
 package com.currencyanalyzer.ai.springai;
 
+import com.currencyanalyzer.ai.chat.AiMetrics;
 import com.currencyanalyzer.ai.provider.AiProviderException;
 import org.springframework.ai.chat.metadata.Usage;
 import org.springframework.ai.chat.messages.AssistantMessage;
@@ -19,6 +20,7 @@ import org.springframework.ai.tool.method.MethodToolCallbackProvider;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
@@ -42,21 +44,34 @@ public class SpringAiChatRunner {
 
     private final ObjectProvider<ChatModel> chatModels;
     private final SpringAiMarketTools marketTools;
+    private final AiMetrics aiMetrics;
     private final ToolCallingManager toolCallingManager = ToolCallingManager.builder().build();
     private final String model;
     private final int maxOutputTokens;
     private volatile List<ToolCallback> toolCallbacks;
 
+    @Autowired
     public SpringAiChatRunner(
         ObjectProvider<ChatModel> chatModels,
         SpringAiMarketTools marketTools,
+        AiMetrics aiMetrics,
         @Value("${app.ai.model:deepseek-flash}") String model,
         @Value("${app.ai.max-output-tokens:8192}") int maxOutputTokens
     ) {
         this.chatModels = chatModels;
         this.marketTools = marketTools;
+        this.aiMetrics = aiMetrics == null ? AiMetrics.noop() : aiMetrics;
         this.model = model;
         this.maxOutputTokens = maxOutputTokens;
+    }
+
+    public SpringAiChatRunner(
+        ObjectProvider<ChatModel> chatModels,
+        SpringAiMarketTools marketTools,
+        String model,
+        int maxOutputTokens
+    ) {
+        this(chatModels, marketTools, AiMetrics.noop(), model, maxOutputTokens);
     }
 
     public boolean available() {
@@ -156,6 +171,7 @@ public class SpringAiChatRunner {
         DsmlToolCallSanitizer.StreamFilter streamFilter = new DsmlToolCallSanitizer.StreamFilter();
         ToolCallBuffer toolCalls = new ToolCallBuffer();
         AtomicReference<String> finishReason = new AtomicReference<>();
+        AtomicReference<String> responseId = new AtomicReference<>();
         int[] usage = new int[2];
         try {
             chatModel.stream(prompt)
@@ -165,6 +181,10 @@ public class SpringAiChatRunner {
                     String reason = finishReason(chunk);
                     if (reason != null) {
                         finishReason.set(reason);
+                    }
+                    String chunkId = readResponseId(chunk);
+                    if (chunkId != null) {
+                        responseId.set(chunkId);
                     }
                     int[] chunkUsage = readUsage(chunk);
                     if (chunkUsage != null) {
@@ -186,6 +206,9 @@ public class SpringAiChatRunner {
         }
         streamFilter.finish(clean -> emitVisible(clean, visibleText, listener));
         listener.onUsage(usage[0], usage[1]);
+        if (responseId.get() != null) {
+            listener.onResponseId(responseId.get());
+        }
         if (cancelled.getAsBoolean() || !includeTools) {
             return new Round(false, reasoning.toString(), visibleText.toString(), finishReason.get());
         }
@@ -193,6 +216,7 @@ public class SpringAiChatRunner {
         if (calls.isEmpty() && DsmlToolCallSanitizer.containsDsml(rawText.toString())) {
             calls = DsmlToolCallSanitizer.extractToolCalls(rawText.toString(), registeredToolNames());
             if (!calls.isEmpty()) {
+                aiMetrics.recordDsmlRecovery(model, calls.size());
                 log.warn("Recovered {} tool call(s) from leaked DeepSeek DSML text output.", calls.size());
             }
         }
@@ -228,6 +252,14 @@ public class SpringAiChatRunner {
             ToolActivity.clear();
         }
         return new Round(true, reasoning.toString(), visibleText.toString(), finishReason.get());
+    }
+
+    private static String readResponseId(ChatResponse chunk) {
+        if (chunk == null || chunk.getMetadata() == null) {
+            return null;
+        }
+        String id = chunk.getMetadata().getId();
+        return id == null || id.isBlank() ? null : id.trim();
     }
 
     private static int[] readUsage(ChatResponse chunk) {
@@ -333,11 +365,8 @@ public class SpringAiChatRunner {
         String content = prior.content() == null ? "" : prior.content();
         if ("assistant".equals(prior.role())) {
             String cleanContent = DsmlToolCallSanitizer.stripDsml(content);
-            DeepSeekAssistantMessage.Builder builder = DeepSeekAssistantMessage.builder().content(cleanContent);
-            if (prior.reasoning() != null && !prior.reasoning().isBlank()) {
-                builder.reasoningContent(prior.reasoning());
-            }
-            return builder.build();
+            // Completed historical turns omit reasoning_content per DeepSeek spec to save prompt tokens.
+            return DeepSeekAssistantMessage.builder().content(cleanContent).build();
         }
         return new UserMessage(content);
     }
@@ -358,6 +387,9 @@ public class SpringAiChatRunner {
         void onToolFinished(String name, String argumentsJson, String result, int durationMs);
 
         default void onUsage(int inputTokens, int outputTokens) {
+        }
+
+        default void onResponseId(String responseId) {
         }
     }
 
@@ -390,6 +422,11 @@ public class SpringAiChatRunner {
                 @Override
                 public void onUsage(int inputTokens, int outputTokens) {
                     listener.onUsage(inputTokens, outputTokens);
+                }
+
+                @Override
+                public void onResponseId(String responseId) {
+                    listener.onResponseId(responseId);
                 }
             };
         }

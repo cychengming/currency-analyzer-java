@@ -88,13 +88,33 @@ public class AiConversationRepository {
     }
 
     public AiMessage addAssistantMessage(UUID conversationId, String content, String reasoning, Instant now) {
+        return addAssistantMessage(conversationId, content, reasoning, null, null, now);
+    }
+
+    public AiMessage addAssistantMessage(
+        UUID conversationId,
+        String content,
+        String reasoning,
+        String promptVersion,
+        String providerResponseId,
+        Instant now
+    ) {
         UUID messageId = UUID.randomUUID();
         OffsetDateTime createdAt = OffsetDateTime.ofInstant(now, ZoneOffset.UTC);
         jdbcTemplate.update("""
-                INSERT INTO ai_messages (id, conversation_id, role, content, reasoning_content, created_at)
-                VALUES (?, ?, 'assistant', ?, ?, ?)
+                INSERT INTO ai_messages (
+                    id, conversation_id, role, content, reasoning_content,
+                    prompt_version, provider_response_id, created_at
+                )
+                VALUES (?, ?, 'assistant', ?, ?, ?, ?, ?)
                 """,
-            messageId, conversationId, content, blankToNull(reasoning), createdAt
+            messageId,
+            conversationId,
+            content,
+            blankToNull(reasoning),
+            truncateNullable(promptVersion, 32),
+            truncateNullable(providerResponseId, 128),
+            createdAt
         );
         jdbcTemplate.update(
             "UPDATE ai_conversations SET updated_at = ? WHERE id = ?",
@@ -131,10 +151,12 @@ public class AiConversationRepository {
     }
 
     public List<AiProviderMessage> findRecentMessages(UUID conversationId) {
-        List<AiProviderMessage> history = jdbcTemplate.query("""
-                SELECT role, content, reasoning_content
+        // Historical reasoning_content is excluded on replay to save 30-60% prompt tokens;
+        // full reasoning_content remains stored in ai_messages for UI rendering via findConversationMessages.
+        return jdbcTemplate.query("""
+                SELECT role, content
                 FROM (
-                    SELECT role, content, reasoning_content, created_at, id
+                    SELECT role, content, created_at, id
                     FROM ai_messages
                     WHERE conversation_id = ?
                     ORDER BY created_at DESC, id DESC
@@ -145,11 +167,10 @@ public class AiConversationRepository {
             (resultSet, rowNumber) -> new AiProviderMessage(
                 resultSet.getString("role"),
                 resultSet.getString("content"),
-                resultSet.getString("reasoning_content")
+                null
             ),
             conversationId, MAX_CONTEXT_MESSAGES
         );
-        return history;
     }
 
     public List<AiMessage> findConversationMessages(UUID conversationId) {
@@ -186,6 +207,14 @@ public class AiConversationRepository {
 
     private static String blankToNull(String value) {
         return value == null || value.isBlank() ? null : value;
+    }
+
+    private static String truncateNullable(String value, int maxLength) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        String trimmed = value.trim();
+        return trimmed.length() <= maxLength ? trimmed : trimmed.substring(0, maxLength);
     }
 
     public record AiProviderMessage(String role, String content, String reasoning) {

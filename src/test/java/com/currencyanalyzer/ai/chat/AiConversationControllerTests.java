@@ -368,6 +368,35 @@ class AiConversationControllerTests {
             Integer.class
         );
         assertEquals(1, toolCalls);
+
+        String promptVersion = jdbcTemplate.queryForObject(
+            "SELECT prompt_version FROM ai_messages WHERE conversation_id = CAST(? AS UUID) AND role = 'assistant' ORDER BY created_at DESC LIMIT 1",
+            String.class,
+            id
+        );
+        String responseId = jdbcTemplate.queryForObject(
+            "SELECT provider_response_id FROM ai_messages WHERE conversation_id = CAST(? AS UUID) AND role = 'assistant' ORDER BY created_at DESC LIMIT 1",
+            String.class,
+            id
+        );
+        java.math.BigDecimal estimatedCost = jdbcTemplate.queryForObject(
+            "SELECT estimated_cost_usd FROM ai_usage WHERE conversation_id = CAST(? AS UUID)",
+            java.math.BigDecimal.class,
+            id
+        );
+        String summaryJson = jdbcTemplate.queryForObject(
+            "SELECT CAST(result_summary AS VARCHAR) FROM ai_tool_invocations WHERE tool_name = 'get_live_rates' ORDER BY created_at DESC LIMIT 1",
+            String.class
+        );
+        assertEquals(com.currencyanalyzer.ai.knowledge.AssistantPrompt.PROMPT_VERSION, promptVersion);
+        assertEquals("resp-live-1", responseId);
+        assertTrue(estimatedCost != null && estimatedCost.signum() > 0);
+        assertTrue(summaryJson != null && summaryJson.contains("pair_count"));
+
+        mockMvc.perform(get("/metrics"))
+            .andExpect(status().isOk())
+            .andExpect(content().string(org.hamcrest.Matchers.containsString("currency_analyzer_ai_requests_total")))
+            .andExpect(content().string(org.hamcrest.Matchers.containsString("currency_analyzer_ai_tool_calls_total")));
     }
 
     @Test
@@ -419,10 +448,22 @@ class AiConversationControllerTests {
                         }
                     }
                     if (latestUser.contains("current EUR/USD rate") && toolResult.isEmpty()) {
-                        return new Completion(null, "The user asked for the live quote.", List.of(new ToolCall("call-1", "get_live_rates", "{}")));
+                        return new Completion(
+                            null,
+                            "The user asked for the live quote.",
+                            List.of(new ToolCall("call-1", "get_live_rates", "{}")),
+                            new AiProvider.ModelUsage(120, 45),
+                            "resp-live-1"
+                        );
                     }
                     if (!toolResult.isEmpty()) {
-                        return new Completion("From the live feed: " + toolResult, null, List.of());
+                        return new Completion(
+                            "From the live feed: " + toolResult,
+                            null,
+                            List.of(),
+                            new AiProvider.ModelUsage(140, 30),
+                            "resp-live-1"
+                        );
                     }
                     if (latestUser.contains("show your thinking")) {
                         return new Completion(null, "Compare the numbers before answering.", List.of());

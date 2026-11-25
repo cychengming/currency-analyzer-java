@@ -1,13 +1,16 @@
 package com.currencyanalyzer;
 
+import com.currencyanalyzer.ai.chat.AiAssistantProperties;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.scheduling.annotation.EnableScheduling;
 
 import java.net.URI;
 import java.util.function.Function;
 
 @EnableScheduling
+@EnableConfigurationProperties(AiAssistantProperties.class)
 @SpringBootApplication
 public class CurrencyAnalyzerApplication {
 
