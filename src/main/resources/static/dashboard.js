@@ -252,6 +252,7 @@ async function initDashboard() {
     initTimeframeControls();
     initOnboardingPanel();
     if (typeof initSettingsPage === 'function') initSettingsPage();
+    if (typeof initMarketsAndAlertsV2 === 'function') initMarketsAndAlertsV2();
     restoreDashboardState();
     await loadSettings();
     await loadAlertPreferences();
@@ -264,144 +265,203 @@ function loadPages() {
     const container = document.getElementById('pagesContainer');
 
     container.innerHTML = `
-        <!-- Overview Page -->
+        <!-- Markets Page (Binance-style 2-Step Flow: Overview Table -> Pair Detail) -->
         <div id="overview" class="page active page-shell">
-            <div class="card">
-                <div class="page-intro">
-                    <div class="page-intro-copy">
-                        <div class="page-eyebrow">Overview</div>
-                        <div class="page-heading">Monitor the market at a glance</div>
-                        <div class="page-subtext">See live prices, recent alert activity, and the currently selected chart without jumping across panels.</div>
+            <!-- Step 1: Markets Directory Table (Clean: no raw spot price clutter) -->
+            <div id="marketsListView">
+                <div class="mkt-highlights">
+                    <div class="mkt-highlight-card">
+                        <div class="mkt-highlight-head">
+                            <span>Top Movers (24h)</span>
+                            <span>Click to inspect</span>
+                        </div>
+                        <div id="mktHighlightMovers"><div class="muted-copy">Loading markets...</div></div>
                     </div>
-                    <div class="summary-card">
-                        <div class="summary-card-title">Workspace Snapshot</div>
-                        <div class="summary-row">
-                            <span>Selected asset</span>
-                            <strong id="workspaceSelectedPair">EUR/USD</strong>
+                    <div class="mkt-highlight-card">
+                        <div class="mkt-highlight-head">
+                            <span>My Favorites</span>
+                            <span id="mktHighlightFavCount">0 pinned</span>
                         </div>
-                        <div class="summary-row">
-                            <span>Timeframe</span>
-                            <strong id="workspaceTimeframe">30 days</strong>
+                        <div id="mktHighlightFavs"><div class="muted-copy">Star pairs below to pin them.</div></div>
+                    </div>
+                    <div class="mkt-highlight-card">
+                        <div class="mkt-highlight-head">
+                            <span>My Armed Alerts</span>
+                            <button type="button" class="app-link-btn" onclick="switchPage('alerts')">Manage →</button>
                         </div>
-                        <div class="summary-row">
-                            <span>Last sync</span>
-                            <strong id="dashboardSyncTime">Waiting for first sync</strong>
+                        <div id="mktHighlightAlerts"><div class="muted-copy">No armed rules yet.</div></div>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="mkt-toolbar">
+                        <div class="mkt-cat-pills" id="mktCategoryPills">
+                            <button type="button" class="mkt-pill active" data-mkt-cat="all">All Markets</button>
+                            <button type="button" class="mkt-pill" data-mkt-cat="fav">★ Favorites</button>
+                            <button type="button" class="mkt-pill" data-mkt-cat="FX">FX</button>
+                            <button type="button" class="mkt-pill" data-mkt-cat="Metals">Metals</button>
+                            <button type="button" class="mkt-pill" data-mkt-cat="Energy">Energy</button>
+                            <button type="button" class="mkt-pill" data-mkt-cat="Indices">Indices</button>
+                            <button type="button" class="mkt-pill" data-mkt-cat="Agri">Agri</button>
                         </div>
-                        <div id="dashboardSyncBadge" class="status-pill status-pill-muted">Waiting for first sync</div>
-                        <div class="quick-actions">
-                            <button class="btn-secondary" style="width:auto;" onclick="switchPage('manage', event)">Manage Alerts</button>
-                            <button class="btn-secondary" style="width:auto;" onclick="switchPage('backtest', event)">Run Backtest</button>
-                            <button class="btn-secondary" style="width:auto;" onclick="switchPage('forecast', event); loadLatestForecast();">View Forecast</button>
-                        </div>
+                        <input type="text" id="mktTableFilter" placeholder="Filter symbol or name..." style="width: 220px; padding: 7px 10px; font-size: 13px;">
+                    </div>
+
+                    <div class="mkt-table-wrap">
+                        <table class="mkt-table">
+                            <thead>
+                                <tr>
+                                    <th style="width:36px;"></th>
+                                    <th>Market</th>
+                                    <th>Category</th>
+                                    <th>24h Move</th>
+                                    <th>My Alerts</th>
+                                    <th style="text-align:right;">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="marketsTableBody">
+                                <tr><td colspan="6" class="loading">Loading live markets...</td></tr>
+                            </tbody>
+                        </table>
                     </div>
                 </div>
             </div>
 
-            <div id="onboardingPanel" class="card onboarding-card">
-                <div class="panel-toolbar">
-                    <div>
-                        <div class="page-eyebrow">Start Here</div>
-                        <h2 class="card-title" style="margin-bottom: 6px;">A faster first run</h2>
-                        <p class="muted-copy">These three steps get a new user from setup to decision support without guessing what to do next.</p>
+            <!-- Step 2: Pair Detail View (Reveals Live Spot, Chart + Alert Lines, Pair Rules) -->
+            <div id="marketDetailView" hidden>
+                <div class="mkt-detail-bar">
+                    <div class="mkt-detail-left">
+                        <button type="button" class="btn-secondary app-compact-btn" onclick="showMarketsListView()">← Markets</button>
+                        <button type="button" class="mkt-star-btn unstarred" id="detailStarBtn" aria-label="Toggle favorite">☆</button>
+                        <div>
+                            <div style="display:flex; align-items:center; gap:8px;">
+                                <select id="detailPairSelect" class="mkt-detail-select" aria-label="Switch market pair"></select>
+                                <span id="selectedPair" hidden>EUR/USD</span>
+                                <span class="mkt-badge mkt-badge-muted" id="detailCategoryBadge">FX</span>
+                            </div>
+                            <div class="mkt-pair-sub" id="detailAssetName">—</div>
+                        </div>
+
+                        <div class="mkt-detail-stats">
+                            <div>
+                                <div class="mkt-spot-big" id="detailSpotPrice">—</div>
+                                <div class="mkt-stat-val" id="detailChangeText">—</div>
+                            </div>
+                            <div>
+                                <div class="mkt-stat-label">Period High</div>
+                                <div class="mkt-stat-val" id="detailPeriodHigh">—</div>
+                            </div>
+                            <div>
+                                <div class="mkt-stat-label">Period Low</div>
+                                <div class="mkt-stat-val" id="detailPeriodLow">—</div>
+                            </div>
+                            <div>
+                                <div class="mkt-stat-label">My Armed Rules</div>
+                                <div class="mkt-stat-val" id="detailArmedCount">0 active</div>
+                            </div>
+                        </div>
                     </div>
-                    <button class="btn-secondary" style="width:auto;" onclick="dismissOnboarding()">Dismiss</button>
+
+                    <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                        <button type="button" class="btn-primary app-compact-btn" id="detailSetAlertBtn">+ Set Alert</button>
+                        <button type="button" class="btn-secondary app-compact-btn" id="detailAskAiBtn">Ask AI</button>
+                    </div>
                 </div>
-                <div class="onboarding-steps">
-                    <div class="onboarding-step">
-                        <div class="onboarding-step-num">1</div>
-                        <div>
-                            <strong>Set your alert rules</strong>
-                            <p class="muted-copy">Choose the pairs and thresholds you actually care about before you start monitoring.</p>
-                            <button class="btn-secondary" style="width:auto; margin-top:8px;" onclick="switchPage('manage', event)">Open Alert Setup</button>
+
+                <div class="card">
+                    <div class="panel-toolbar" style="margin-bottom: 12px;">
+                        <div class="mkt-tf-pills" id="detailTimeframePills">
+                            <button type="button" class="mkt-pill" data-tf-days="7">1W</button>
+                            <button type="button" class="mkt-pill active" data-tf-days="30">1M</button>
+                            <button type="button" class="mkt-pill" data-tf-days="90">3M</button>
+                            <button type="button" class="mkt-pill" data-tf-days="180">6M</button>
+                            <button type="button" class="mkt-pill" data-tf-days="365">1Y</button>
                         </div>
+                        <span class="muted-copy" id="detailOverlayLegend">Armed price alert lines appear on chart</span>
                     </div>
-                    <div class="onboarding-step">
-                        <div class="onboarding-step-num">2</div>
-                        <div>
-                            <strong>Backtest one idea</strong>
-                            <p class="muted-copy">Validate a simple rule on the selected pair before layering on more parameters.</p>
-                            <button class="btn-secondary" style="width:auto; margin-top:8px;" onclick="switchPage('backtest', event)">Open Backtest</button>
+                    <div class="chart-container" style="height: 360px; margin: 8px 0;">
+                        <canvas id="priceChart"></canvas>
+                        <div id="chartEmpty" class="loading" style="display:none;">No historical data available</div>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="panel-toolbar" style="margin-bottom: 14px;">
+                        <div class="mkt-cat-pills">
+                            <button type="button" class="mkt-pill active" data-detail-tab="rules">My Alert Rules (<span id="detailTabRuleCount">0</span>)</button>
+                            <button type="button" class="mkt-pill" data-detail-tab="signals">Triggered History</button>
+                            <button type="button" class="mkt-pill" data-detail-tab="actions">Quick Lab &amp; Trade</button>
                         </div>
+                        <button type="button" class="app-link-btn" id="detailSubAddRuleBtn">+ New Rule for Pair</button>
                     </div>
-                    <div class="onboarding-step">
-                        <div class="onboarding-step-num">3</div>
-                        <div>
-                            <strong>Generate or review a forecast</strong>
-                            <p class="muted-copy">Run a DL job only when you need a fresh run, otherwise inspect the latest forecast directly.</p>
-                            <div class="quick-actions" style="margin-top:8px;">
-                                <button class="btn-secondary" style="width:auto;" onclick="switchPage('deepLearning', event)">Open Deep Learning</button>
-                                <button class="btn-secondary" style="width:auto;" onclick="switchPage('forecast', event); loadLatestForecast();">Open Forecast</button>
+                    <div id="detailPanelRules"></div>
+                    <div id="detailPanelSignals" hidden></div>
+                    <div id="detailPanelActions" hidden>
+                        <div class="grid-2" style="margin-bottom:0;">
+                            <div class="rule-row-card" style="margin:0;">
+                                <div>
+                                    <strong>Run Strategy Backtest</strong>
+                                    <div class="muted-copy">Validate a rule on this pair's historical data.</div>
+                                </div>
+                                <button type="button" class="btn-secondary" onclick="if (typeof openBacktestForSelectedPair === 'function') openBacktestForSelectedPair();">Open Backtest →</button>
+                            </div>
+                            <div class="rule-row-card" style="margin:0;">
+                                <div>
+                                    <strong>Open Paper Trade</strong>
+                                    <div class="muted-copy">Record or manage simulated positions on this pair.</div>
+                                </div>
+                                <button type="button" class="btn-secondary" onclick="switchPage('trade'); if (typeof initTradePage === 'function') initTradePage();">Open Trade →</button>
                             </div>
                         </div>
                     </div>
                 </div>
             </div>
-
-            <div class="grid-2">
-                <div class="card">
-                    <h2 class="card-title">Live Exchange Rates</h2>
-                    <div class="rates-grid" id="ratesGrid">
-                        <div class="loading">Loading rates...</div>
-                    </div>
-                </div>
-
-                <div class="card">
-                    <h2 class="card-title">Recent Alerts</h2>
-                    <div class="alert-list" id="recentAlerts">
-                        <div class="loading">No alerts yet</div>
-                    </div>
-                </div>
-            </div>
-
-            <div class="card">
-                <div class="panel-toolbar">
-                    <h2 class="card-title" style="margin:0;"><span id="selectedPair">EUR/USD</span> Historical Chart</h2>
-                    <div class="control-inline">
-                        <label for="timeframeUnit" style="font-size: 13px; color: #94a3b8;">Unit</label>
-                        <select id="timeframeUnit" onchange="changeTimeframeUnit()">
-                            <option value="days" selected>Days</option>
-                            <option value="weeks">Weeks</option>
-                            <option value="months">Months</option>
-                        </select>
-                        <label for="timeframeValue" style="font-size: 13px; color: #94a3b8;">Value</label>
-                        <select id="timeframeValue" onchange="changeTimeframeValue()"></select>
-                    </div>
-                </div>
-                <div class="chart-container">
-                    <canvas id="priceChart"></canvas>
-                    <div id="chartEmpty" class="loading" style="display:none;">No historical data available</div>
-                </div>
-            </div>
         </div>
 
-        <!-- Alert History Page -->
+        <!-- Unified Alerts 2.0 Page (Per-User Watchlist Rules + Personal Alert History) -->
         <div id="alerts" class="page page-shell">
             <div class="card">
-                <h2 class="card-title">Complete Alert History</h2>
-                <div class="alert-list" id="alertHistory">
-                    <div class="loading">No alerts yet</div>
-                </div>
-                <div style="margin-top: 20px;">
-                    <button class="btn-danger" onclick="clearAlertHistory()">Clear All Alerts</button>
-                </div>
-            </div>
-        </div>
-
-        <!-- Manage Alerts Page -->
-        <div id="manage" class="page page-shell">
-            <div class="card">
-                <div class="page-intro">
-                    <div class="page-intro-copy">
-                        <div class="page-eyebrow">Alert Setup</div>
-                        <div class="page-heading">Manage alert preferences by pair</div>
-                        <div class="page-subtext">Tune thresholds and signal types in one place. Settings are grouped per instrument to keep setup simple.</div>
+                <div class="alerts-v2-topbar">
+                    <div>
+                        <h2 class="card-title" style="margin-bottom:4px;">My Alerts Workspace</h2>
+                        <p class="muted-copy">Every signed-in user owns their own multi-rule watchlist, personal email target, and private alert feed.</p>
+                    </div>
+                    <div class="alerts-v2-email-bar">
+                        <input type="email" id="alertsPersonalEmail" placeholder="your-email@example.com" aria-label="Personal alert email">
+                        <button type="button" class="btn-secondary" id="alertsSaveEmailBtn">Save Email</button>
+                        <button type="button" class="btn-secondary" id="alertsTestEmailBtn">Test Email</button>
+                        <button type="button" class="btn-primary" id="alertsNewRuleBtn">+ New Alert Rule</button>
                     </div>
                 </div>
-                <p class="muted-copy" style="margin-bottom: 20px;">
-                    Configure multiple alert types per currency pair. Choose from 6 different alert conditions.
-                </p>
-                <div id="alertPreferencesContainer" class="preferences-grid">
-                    <div class="loading">Loading preferences...</div>
+                <div class="inline-banner" id="alertsV2Notice" style="display:none;"></div>
+            </div>
+
+            <div class="alerts-v2-grid">
+                <div class="card">
+                    <div class="panel-toolbar" style="margin-bottom:14px;">
+                        <div>
+                            <h2 class="card-title" style="margin-bottom:2px;">My Rule Watchlist</h2>
+                            <p class="muted-copy">Click any pair to open its detail chart · Edit, Pause/Re-arm, or Delete inline.</p>
+                        </div>
+                        <span class="mkt-badge mkt-badge-muted" id="alertsV2RuleCount">0 rules</span>
+                    </div>
+                    <div id="alertsV2RulesList"><div class="loading">Loading your alert rules...</div></div>
+                </div>
+
+                <div class="card">
+                    <div class="panel-toolbar" style="margin-bottom:14px;">
+                        <div>
+                            <h2 class="card-title" style="margin-bottom:2px;">My Alert History</h2>
+                            <p class="muted-copy">Triggered signals for your account only.</p>
+                        </div>
+                        <div style="display:flex; gap:6px; flex-wrap:wrap;">
+                            <button type="button" class="mkt-pill active" data-inbox-filter="all">All</button>
+                            <button type="button" class="mkt-pill" data-inbox-filter="unread">Unread</button>
+                            <button type="button" class="btn-secondary app-compact-btn" id="alertsMarkAllReadBtn">Mark All Read</button>
+                            <button type="button" class="btn-danger app-compact-btn" id="alertsClearInboxBtn">Clear</button>
+                        </div>
+                    </div>
+                    <div id="alertsV2InboxList" class="alert-list"><div class="loading">Loading alert history...</div></div>
                 </div>
             </div>
         </div>
@@ -969,7 +1029,7 @@ async function refreshData() {
         const liveResult = await Promise.allSettled([fetchLiveRates()]);
         const remainingResults = await Promise.allSettled([
             fetchHistoricalData(),
-            fetchAlerts(),
+            typeof refreshAlertsV2 === 'function' ? refreshAlertsV2() : fetchAlerts(),
             updateMonitoringStatus()
         ]);
         const results = [...liveResult, ...remainingResults];
@@ -1007,6 +1067,12 @@ window.handleDashboardPageChange = function handleDashboardPageChange(page) {
     writeDashboardState({ activePage: page });
     if (page === 'knowledge' && typeof initKnowledgePage === 'function') {
         initKnowledgePage();
+    }
+    if (page === 'alerts' && typeof refreshAlertsV2 === 'function') {
+        refreshAlertsV2();
+    }
+    if (page === 'overview' && typeof renderMarketsShell === 'function') {
+        renderMarketsShell();
     }
 };
 
@@ -1091,7 +1157,11 @@ async function fetchLiveRates() {
 }
 
 function renderRates() {
+    if (typeof renderMarketsShell === 'function') {
+        renderMarketsShell();
+    }
     const grid = document.getElementById('ratesGrid');
+    if (!grid) return;
     const pairs = Object.keys(liveRates);
 
     if (pairs.length === 0) {
@@ -1118,17 +1188,13 @@ function renderRates() {
 
 async function selectPair(pair) {
     selectedPair = pair;
-    document.getElementById('selectedPair').textContent = pair;
+    window.selectedPair = pair;
+    const selectedPairEl = document.getElementById('selectedPair');
+    if (selectedPairEl) selectedPairEl.textContent = pair;
     writeDashboardState({ selectedPair: pair });
     updateWorkspaceSummary();
     renderRates();
     await fetchHistoricalData();
-
-    // Keep backtest pair in sync if user wants it
-    const btPairEl = document.getElementById('btPair');
-    if (btPairEl && btPairEl.value !== pair) {
-        // do not force overwrite; the button exists for that.
-    }
 }
 
 function supportedBacktestTypes(conditions) {
@@ -1809,18 +1875,32 @@ function updateChart(data) {
     }
 
     try {
+        window.lastChartPoints = validPoints;
+        const numericRates = validPoints.map(d => parseFloat(d.rate));
+        if (typeof updatePairDetailPeriodStats === 'function') {
+            updatePairDetailPeriodStats(numericRates);
+        }
+
+        const datasets = [{
+            label: selectedPair + ' - ' + getTimeframeLabel(),
+            data: numericRates,
+            borderColor: '#3b82f6',
+            backgroundColor: 'rgba(59, 130, 246, 0.1)',
+            tension: 0.1,
+            fill: true,
+            pointRadius: 1.5
+        }];
+
+        if (typeof getArmedPriceAlertOverlayDatasets === 'function') {
+            const overlays = getArmedPriceAlertOverlayDatasets(selectedPair, validPoints.length);
+            overlays.forEach(ds => datasets.push(ds));
+        }
+
         chart = new Chart(ctx, {
             type: 'line',
             data: {
                 labels: validPoints.map(d => d.date),
-                datasets: [{
-                    label: selectedPair + ' - ' + getTimeframeLabel(),
-                    data: validPoints.map(d => parseFloat(d.rate)),
-                    borderColor: '#3b82f6',
-                    backgroundColor: 'rgba(59, 130, 246, 0.1)',
-                    tension: 0.1,
-                    fill: true
-                }]
+                datasets
             },
             options: {
                 responsive: true,
@@ -2048,6 +2128,7 @@ async function loadAlertPreferences() {
 
 function renderAlertPreferences(preferences, conditions) {
     const container = document.getElementById('alertPreferencesContainer');
+    if (!container) return;
 
     const pairs = Object.keys(preferences).sort();
     container.innerHTML = pairs.map(pair => {

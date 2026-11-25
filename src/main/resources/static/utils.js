@@ -62,35 +62,53 @@ function switchTab(tab, evt) {
 }
 
 function switchPage(page, evt) {
+    const targetPage = page === 'manage' ? 'alerts' : page;
     const navTabs = document.querySelectorAll('.nav-tab');
     const pages = document.querySelectorAll('.page');
 
     navTabs.forEach(tab => tab.classList.remove('active'));
     pages.forEach(p => p.classList.remove('active'));
 
+    const labPages = new Set(['backtest', 'forecast', 'deepLearning']);
+    const navMatchPage = labPages.has(targetPage) ? 'backtest' : targetPage;
+
     const e = evt || window.event;
-    const activeTab = (e && e.target && e.target.classList.contains('nav-tab'))
-        ? e.target
-        : document.querySelector(`.nav-tab[data-page="${page}"]`);
+    const clickedTab = e && e.target && e.target.closest ? e.target.closest('.nav-tab') : null;
+    const activeTab = (clickedTab && clickedTab.dataset.page === navMatchPage)
+        ? clickedTab
+        : document.querySelector(`.nav-tab[data-page="${navMatchPage}"]`);
     if (activeTab) {
         activeTab.classList.add('active');
     }
 
-    const pageEl = document.getElementById(page);
+    const labSubnav = document.getElementById('labSubnav');
+    if (labSubnav) {
+        labSubnav.hidden = !labPages.has(targetPage);
+        document.querySelectorAll('.app-subtab').forEach(btn => {
+            btn.classList.toggle('active', btn.dataset.labPage === targetPage);
+        });
+    }
+
+    const sidebar = document.getElementById('appSidebar');
+    if (sidebar) {
+        sidebar.classList.remove('open');
+    }
+
+    const pageEl = document.getElementById(targetPage);
     if (pageEl) {
         pageEl.classList.add('active');
     }
 
     try {
         const existing = JSON.parse(localStorage.getItem(DASHBOARD_UI_STATE_KEY) || '{}');
-        existing.activePage = page;
+        existing.activePage = targetPage;
         localStorage.setItem(DASHBOARD_UI_STATE_KEY, JSON.stringify(existing));
     } catch (_) {
         // Ignore localStorage errors.
     }
 
     if (typeof window.handleDashboardPageChange === 'function') {
-        window.handleDashboardPageChange(page);
+        window.handleDashboardPageChange(targetPage);
     }
 }
 
