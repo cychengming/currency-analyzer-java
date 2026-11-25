@@ -42,38 +42,39 @@ public class SpringAiMarketTools {
         return invoke(AssistantTools.COMPARE_PAIRS, Map.of("first", first, "second", second, "days", days));
     }
 
-    @Tool(name = AssistantTools.GET_ALERT_HISTORY, description = AssistantTools.GET_ALERT_HISTORY_DESCRIPTION)
-    public String getAlertHistory(
-        @ToolParam(description = "Optional pair filter, such as EUR/USD", required = false) String pair,
-        @ToolParam(description = "Maximum alerts to return, from 1 to 20", required = false) Integer limit
+    @Tool(name = AssistantTools.ANALYZE_PAIR_TECHNICALS, description = AssistantTools.ANALYZE_PAIR_TECHNICALS_DESCRIPTION)
+    public String analyzePairTechnicals(
+        @ToolParam(description = "Pair such as EUR/USD or GOLD/USD") String pair,
+        @ToolParam(description = "Lookback days, from 14 to 365 (default 90)", required = false) Integer days
     ) {
-        return invoke(AssistantTools.GET_ALERT_HISTORY, optional("pair", pair, "limit", limit));
+        return invoke(AssistantTools.ANALYZE_PAIR_TECHNICALS, optional("pair", pair, "days", days));
     }
 
-    @Tool(name = AssistantTools.GET_ALERT_PREFERENCES, description = AssistantTools.GET_ALERT_PREFERENCES_DESCRIPTION)
-    public String getAlertPreferences(
-        @ToolParam(description = "Optional pair filter, such as EUR/USD", required = false) String pair
+    @Tool(name = AssistantTools.CALCULATE_POSITION_SIZE, description = AssistantTools.CALCULATE_POSITION_SIZE_DESCRIPTION)
+    public String calculatePositionSize(
+        @ToolParam(description = "Pair such as EUR/USD or GOLD/USD") String pair,
+        @ToolParam(description = "Total account equity (positive number)") double accountEquity,
+        @ToolParam(description = "Percentage of equity to risk on this setup (e.g. 1.0 for 1%)") double riskPct,
+        @ToolParam(description = "Planned stop-loss price") double stopLossPrice,
+        @ToolParam(description = "Planned entry price; omit to use the current live spot rate", required = false) Double entryPrice,
+        @ToolParam(description = "Optional take-profit target price for R:R calculation", required = false) Double takeProfitPrice
     ) {
-        return invoke(AssistantTools.GET_ALERT_PREFERENCES, optional("pair", pair));
-    }
-
-    @Tool(name = AssistantTools.GET_MONITORING_STATE, description = AssistantTools.GET_MONITORING_STATE_DESCRIPTION)
-    public String getMonitoringState(
-        @ToolParam(description = "Optional pair filter, such as EUR/USD", required = false) String pair
-    ) {
-        return invoke(AssistantTools.GET_MONITORING_STATE, optional("pair", pair));
+        return invoke(
+            AssistantTools.CALCULATE_POSITION_SIZE,
+            optional(
+                "pair", pair,
+                "account_equity", accountEquity,
+                "risk_pct", riskPct,
+                "stop_loss_price", stopLossPrice,
+                "entry_price", entryPrice,
+                "take_profit_price", takeProfitPrice
+            )
+        );
     }
 
     @Tool(name = AssistantTools.GET_SETTINGS, description = AssistantTools.GET_SETTINGS_DESCRIPTION)
     public String getSettings() {
         return invoke(AssistantTools.GET_SETTINGS, Map.of());
-    }
-
-    @Tool(name = AssistantTools.GET_LATEST_FORECAST, description = AssistantTools.GET_LATEST_FORECAST_DESCRIPTION)
-    public String getLatestForecast(
-        @ToolParam(description = "Optional asset, such as EUR/USD or GOLD/USD", required = false) String asset
-    ) {
-        return invoke(AssistantTools.GET_LATEST_FORECAST, optional("asset", asset));
     }
 
     @Tool(name = AssistantTools.SEARCH_NOTES, description = AssistantTools.SEARCH_NOTES_DESCRIPTION)

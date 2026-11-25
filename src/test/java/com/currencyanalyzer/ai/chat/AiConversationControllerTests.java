@@ -371,37 +371,19 @@ class AiConversationControllerTests {
     }
 
     @Test
-    void readsRecordedAlertsAndStoredForecasts() {
-        jdbcTemplate.update("""
-                INSERT INTO alerts (
-                    pair, percent_change, old_rate, new_rate, timestamp, email_sent, alert_type
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
-                """,
-            "EUR/USD", 2.5, 1.05, 1.076, OffsetDateTime.of(2026, 11, 20, 8, 0, 0, 0, ZoneOffset.UTC),
-            false, "percentage_change"
-        );
-        jdbcTemplate.update("""
-                INSERT INTO dl_forecast_runs (
-                    created_at, model_type, lookback_days, horizon_days, asset, notes
-                ) VALUES (?, ?, ?, ?, ?, ?)
-                """,
-            "2026-11-20T08:00:00Z", "lstm", 60, 5, "EUR/USD", "test run"
-        );
-        Long runId = jdbcTemplate.queryForObject("SELECT id FROM dl_forecast_runs WHERE asset = 'EUR/USD'", Long.class);
-        jdbcTemplate.update(
-            "INSERT INTO asset_forecast_daily (run_id, dt, predicted_close) VALUES (?, ?, ?)",
-            runId, "2026-11-21", 1.09
+    void rejectsRetiredLegacyToolsAndComputesPositionSizeWithStoredRiskLimit() {
+        String retiredAlerts = assistantTools.execute("get_alert_history", "{\"pair\":\"EUR/USD\",\"limit\":5}");
+        String retiredForecast = assistantTools.execute("get_latest_forecast", "{\"asset\":\"EUR/USD\"}");
+        String sizing = assistantTools.execute(
+            "calculate_position_size",
+            "{\"pair\":\"EUR/USD\",\"account_equity\":10000,\"risk_pct\":2.0,\"entry_price\":1.10,\"stop_loss_price\":1.08,\"take_profit_price\":1.14}"
         );
 
-        String alerts = assistantTools.execute("get_alert_history", "{\"pair\":\"EUR/USD\",\"limit\":5}");
-        String forecast = assistantTools.execute("get_latest_forecast", "{\"asset\":\"EUR/USD\"}");
-        String missing = assistantTools.execute("get_latest_forecast", "{\"asset\":\"GBP/USD\"}");
-
-        assertTrue(alerts.contains("percentage_change"));
-        assertTrue(alerts.contains("EUR/USD"));
-        assertTrue(forecast.contains("\"available\":true"));
-        assertTrue(forecast.contains("1.09"));
-        assertTrue(missing.contains("No forecast has been stored"));
+        assertTrue(retiredAlerts.contains("Unknown tool"));
+        assertTrue(retiredForecast.contains("Unknown tool"));
+        assertTrue(sizing.contains("\"direction\":\"long\""));
+        assertTrue(sizing.contains("\"daily_risk_limit_pct\":3.0"));
+        assertTrue(sizing.contains("\"exceeds_daily_risk_limit\":false"));
     }
 
     @TestConfiguration

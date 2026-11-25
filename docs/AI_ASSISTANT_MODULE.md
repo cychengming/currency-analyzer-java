@@ -210,7 +210,7 @@ event: text_delta
 data: {"text":"The alert triggered because "}
 
 event: tool_completed
-data: {"tool":"get_alert_history","row_count":1,"as_of":"2026-11-07T03:29:00Z"}
+data: {"tool":"get_my_alert_inbox","status":"ok"}
 
 event: message_completed
 data: {"message_id":"...","finish_reason":"completed"}
@@ -512,3 +512,47 @@ Unless changed during review:
 - [DeepSeek API quick start](https://api-docs.deepseek.com/)
 - [DeepSeek streaming guide](https://api-docs.deepseek.com/guides/streaming)
 - [DeepSeek chat completions API](https://api-docs.deepseek.com/api/create-chat-completion)
+
+---
+
+## 20. Implemented Tool Catalog, Quant Engine & DeepSeek Hardening (Updated 2026-11-25)
+
+The live Java implementation uses Spring AI (`spring-ai-starter-model-deepseek`) orchestrated by `SpringAiChatRunner` and `AiConversationService`, backed by **11 focused, non-overlapping tools** in `AssistantTools` / `SpringAiMarketTools`.
+
+### 20.1 Active Tool Catalog (11 Tools)
+
+| Category | Tool Name | Access | Engine / Backing Service | Purpose |
+|---|---|---|---|---|
+| **Market Data** | `get_live_rates` | Read-only | `MarketDataService` | Cached live spot quotes (`rate`, `change`, `change_percent`, `as_of`) |
+| **Market Data** | `get_historical_series` | Read-only | `MarketDataService` | Daily closes (`1..365` days), window change, and sampled series |
+| **Market Data** | `compare_pairs` | Read-only | `MarketDataService` + **`hipparchus-stat`** | Side-by-side return comparison, date-aligned Pearson return correlation, correlation regime, beta, and annualized volatility comparison |
+| **Quant Analytics** | `analyze_pair_technicals` | Read-only | **`ta4j-core` (`0.29.0`)** + **`hipparchus-stat` (`4.0.3`)** | Deterministic SMA-20/50, EMA-12/26, Wilder RSI-14, MACD (12/26/9), Bollinger Bands (20), period high/low, max drawdown, and annualized volatility (`14..365` days, default `90`) |
+| **Risk Sizing** | `calculate_position_size` | Read-only | `MarketQuantAnalytics` + `MarketDataService` + `settings` | Deterministic risk amount, stop distance %, position units, notional exposure, implied leverage, optional R:R ratio, and `daily_risk_limit_pct` check (auto-uses live spot if `entry_price` is omitted) |
+| **Alerts 2.0** | `list_my_alert_rules` | User-scoped read | `UserAlertRuleService` (`ToolUserContext`) | Signed-in user's Alerts 2.0 rules with live spot rate, distance %, favorites, and alert email |
+| **Alerts 2.0** | `get_my_alert_inbox` | User-scoped read | `UserAlertRuleService` (`ToolUserContext`) | Signed-in user's personal triggered alerts, unread count, favorites, and alert email |
+| **Alerts 2.0** | `create_alert_rule` | User-scoped write | `UserAlertRuleService` (`ToolUserContext`) | Creates a personal Alerts 2.0 rule (`cross_above`, `cross_below`, `pct_move`, `ma_crossover`) on explicit user request |
+| **Alerts 2.0** | `update_alert_rule_status` | User-scoped write | `UserAlertRuleService` (`ToolUserContext`) | Pauses, resumes, or re-arms (`ARMED` / `PAUSED`) one of the signed-in user's own rules |
+| **App Config** | `get_settings` | Read-only | `settings` table | Non-secret application settings (passwords/tokens/API keys omitted) |
+| **Knowledge / RAG** | `search_notes` | Read-only | `KnowledgeRetriever` (`pgvector` hybrid RAG) | Semantic + keyword search over built-in guides and uploaded workspace documents |
+
+### 20.2 Retired Legacy Tools & Security Cleanup
+
+Four legacy tools were retired from the LLM tool catalog to keep tool-schema token overhead low, prevent tool-selection ambiguity in `deepseek-flash`, and eliminate a multi-user isolation gap:
+
+- **`get_alert_history`** — Retired. After `V8__user_alert_rules.sql` added `user_id` to the shared `alerts` table, this legacy global query lacked a `user_id` filter and overlapped with `get_my_alert_inbox`.
+- **`get_alert_preferences`** — Retired. Legacy pair preferences are bypassed by `AlertEvaluationService` whenever Alerts 2.0 rules exist and overlapped with `list_my_alert_rules`.
+- **`get_monitoring_state`** — Retired. Legacy per-pair cooldown timestamps are superseded by per-rule `last_triggered_at` / `cooldown_remaining_seconds` in `list_my_alert_rules` and global `monitoring_enabled` in `get_settings`.
+- **`get_latest_forecast`** — Retired. The Java backend does not write to `dl_forecast_runs`, so exposing the schema wasted prompt tokens on every turn.
+
+### 20.3 Quantitative Library Choices
+
+- **`org.ta4j:ta4j-core:0.29.0`** — Pure-Java technical analysis engine (`BarSeries`, `SMAIndicator`, `EMAIndicator`, `RSIIndicator`, `MACDIndicator`, `BollingerBands*`, `StandardDeviationIndicator`) with zero native/JNI dependencies.
+- **`org.hipparchus:hipparchus-stat:4.0.3`** — Active successor to Apache Commons Math providing `PearsonsCorrelation`, `Covariance`, and `DescriptiveStatistics` for return correlation, beta, and annualized volatility.
+
+### 20.4 DeepSeek DSML Leak Prevention & Recovery
+
+DeepSeek reasoning/flash models natively generate internal DSML tags (`<｜DSML｜function_calls>...`) that the API normally translates into JSON `tool_calls`. Occasionally (especially with malformed tags like `<｜｜DSML｜｜ calls>` or when `tools` is omitted on retry turns), raw DSML leaks into `content` and can poison subsequent turns.
+
+- **`DsmlToolCallSanitizer`** provides a linear-time streaming filter (`StreamFilter`) that suppresses raw DSML before it reaches the browser SSE stream while preserving zero-latency streaming for ordinary text.
+- When DeepSeek leaks valid `invoke` blocks without structured `tool_calls` on a tool-enabled round, **`SpringAiChatRunner`** recovers and executes the allowed tool calls through `ToolCallingManager`.
+- Both **`SpringAiChatRunner`** and **`AiConversationService`** strip leaked DSML from saved and replayed assistant messages, and `SpringAiChatRunner` keeps `toolCallbacks` attached with explicit `toolChoice("auto" | "none")` across all rounds.

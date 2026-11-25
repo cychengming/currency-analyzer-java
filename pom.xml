@@ -32,6 +32,8 @@
         <jackson.version>2.18.4</jackson.version>
         <gcp-libraries-bom.version>26.58.0</gcp-libraries-bom.version>
         <cloud-sql-socket-factory.version>1.28.4</cloud-sql-socket-factory.version>
+        <ta4j.version>0.29.0</ta4j.version>
+        <hipparchus.version>4.0.3</hipparchus.version>
         <argLine/>
     </properties>
 
@@ -122,6 +124,16 @@
         <dependency>
             <groupId>com.google.cloud</groupId>
             <artifactId>google-cloud-storage</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.ta4j</groupId>
+            <artifactId>ta4j-core</artifactId>
+            <version>${ta4j.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.hipparchus</groupId>
+            <artifactId>hipparchus-stat</artifactId>
+            <version>${hipparchus.version}</version>
         </dependency>
 
         <dependency>
