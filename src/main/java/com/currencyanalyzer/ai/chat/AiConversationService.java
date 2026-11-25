@@ -9,8 +9,10 @@ import com.currencyanalyzer.ai.provider.AiProvider.ModelUsage;
 import com.currencyanalyzer.ai.provider.AiProvider.ToolCall;
 import com.currencyanalyzer.ai.provider.AiProvider.Turn;
 import com.currencyanalyzer.ai.provider.AiProviderException;
+import com.currencyanalyzer.ai.springai.DsmlToolCallSanitizer;
 import com.currencyanalyzer.ai.springai.SpringAiChatRunner;
 import com.currencyanalyzer.ai.tools.AssistantTools;
+import com.currencyanalyzer.ai.tools.ToolUserContext;
 import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -179,6 +181,7 @@ public class AiConversationService {
         StringBuilder responseText = new StringBuilder();
         StringBuilder reasoningText = new StringBuilder();
         UsageLedger usage = new UsageLedger();
+        ToolUserContext.bind(activeResponse.username);
         try {
             sendEvent(activeResponse.emitter, "message_started", Map.of(
                 "user_message_id", userMessageId.toString()
@@ -203,9 +206,10 @@ public class AiConversationService {
                 }
             }
 
-            if (!activeResponse.cancelled.get() && !responseText.isEmpty()) {
+            String persistedContent = DsmlToolCallSanitizer.stripDsml(responseText.toString());
+            if (!activeResponse.cancelled.get() && !persistedContent.isEmpty()) {
                 AiMessage assistantMessage = conversationRepository.addAssistantMessage(
-                    conversationId, responseText.toString(), reasoningText.toString(), clock.instant()
+                    conversationId, persistedContent, reasoningText.toString(), clock.instant()
                 );
                 for (ToolTrace toolTrace : toolTraces) {
                     conversationRepository.addToolInvocation(
@@ -244,6 +248,7 @@ public class AiConversationService {
                 }
             }
         } finally {
+            ToolUserContext.clear();
             try {
                 usageService.record(
                     activeResponse.username,
@@ -365,14 +370,15 @@ public class AiConversationService {
                 usage
             );
             appendReasoning(activeResponse, reasoningText, completion.reasoning());
-            appendDelta(activeResponse, responseText, completion.content());
+            String cleanContent = DsmlToolCallSanitizer.stripDsml(completion.content());
+            appendDelta(activeResponse, responseText, cleanContent);
             if (!completion.hasToolCalls() || forceAnswer) {
                 return usedTools || responseText.length() > 0;
             }
             usedTools = true;
             List<ToolCall> calls = completion.toolCalls();
             int accepted = Math.min(calls.size(), MAX_TOOL_CALLS_PER_ROUND);
-            prompt.add(Turn.toolRequest(completion.content(), completion.reasoning(), calls.subList(0, accepted)));
+            prompt.add(Turn.toolRequest(cleanContent, completion.reasoning(), calls.subList(0, accepted)));
             for (int index = 0; index < calls.size(); index++) {
                 ToolCall call = calls.get(index);
                 if (index >= accepted) {
@@ -385,7 +391,7 @@ public class AiConversationService {
         if (usedTools && responseText.isEmpty() && !activeResponse.cancelled.get()) {
             Completion completion = completeTracked(prompt, List.of(), activeResponse, usage);
             appendReasoning(activeResponse, reasoningText, completion.reasoning());
-            appendDelta(activeResponse, responseText, completion.content());
+            appendDelta(activeResponse, responseText, DsmlToolCallSanitizer.stripDsml(completion.content()));
         }
         return usedTools || responseText.length() > 0;
     }
@@ -462,10 +468,13 @@ public class AiConversationService {
     }
 
     private static Turn historyTurn(AiConversationRepository.AiProviderMessage message) {
+        String content = "assistant".equals(message.role())
+            ? DsmlToolCallSanitizer.stripDsml(message.content())
+            : message.content();
         if ("assistant".equals(message.role()) && message.reasoning() != null && !message.reasoning().isBlank()) {
-            return Turn.assistant(message.content(), message.reasoning());
+            return Turn.assistant(content, message.reasoning());
         }
-        return Turn.text(message.role(), message.content());
+        return Turn.text(message.role(), content);
     }
 
     private void appendDelta(ActiveResponse activeResponse, StringBuilder responseText, String delta) {

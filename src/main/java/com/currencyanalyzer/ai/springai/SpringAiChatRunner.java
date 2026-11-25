@@ -25,8 +25,10 @@ import org.springframework.stereotype.Component;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
+import java.util.stream.Collectors;
 
 @Component
 public class SpringAiChatRunner {
@@ -148,8 +150,10 @@ public class SpringAiChatRunner {
     ) {
         DeepSeekChatOptions options = options(includeTools, thinking);
         Prompt prompt = new Prompt(messages, options);
-        StringBuilder text = new StringBuilder();
+        StringBuilder rawText = new StringBuilder();
+        StringBuilder visibleText = new StringBuilder();
         StringBuilder reasoning = new StringBuilder();
+        DsmlToolCallSanitizer.StreamFilter streamFilter = new DsmlToolCallSanitizer.StreamFilter();
         ToolCallBuffer toolCalls = new ToolCallBuffer();
         AtomicReference<String> finishReason = new AtomicReference<>();
         int[] usage = new int[2];
@@ -157,7 +161,7 @@ public class SpringAiChatRunner {
             chatModel.stream(prompt)
                 .takeWhile(chunk -> !cancelled.getAsBoolean())
                 .doOnNext(chunk -> {
-                    absorb(chunk, text, reasoning, toolCalls, listener);
+                    absorb(chunk, rawText, visibleText, reasoning, streamFilter, toolCalls, listener);
                     String reason = finishReason(chunk);
                     if (reason != null) {
                         finishReason.set(reason);
@@ -172,7 +176,7 @@ public class SpringAiChatRunner {
         } catch (RuntimeException exception) {
             if (cancelled.getAsBoolean()) {
                 listener.onUsage(usage[0], usage[1]);
-                return new Round(false, reasoning.toString(), text.toString(), finishReason.get());
+                return new Round(false, reasoning.toString(), visibleText.toString(), finishReason.get());
             }
             listener.onUsage(usage[0], usage[1]);
             if (exception instanceof AiProviderException providerException) {
@@ -180,19 +184,27 @@ public class SpringAiChatRunner {
             }
             throw new AiProviderException("Unable to communicate with DeepSeek", exception);
         }
+        streamFilter.finish(clean -> emitVisible(clean, visibleText, listener));
         listener.onUsage(usage[0], usage[1]);
         if (cancelled.getAsBoolean() || !includeTools) {
-            return new Round(false, reasoning.toString(), text.toString(), finishReason.get());
+            return new Round(false, reasoning.toString(), visibleText.toString(), finishReason.get());
         }
         List<AssistantMessage.ToolCall> calls = toolCalls.toList();
+        if (calls.isEmpty() && DsmlToolCallSanitizer.containsDsml(rawText.toString())) {
+            calls = DsmlToolCallSanitizer.extractToolCalls(rawText.toString(), registeredToolNames());
+            if (!calls.isEmpty()) {
+                log.warn("Recovered {} tool call(s) from leaked DeepSeek DSML text output.", calls.size());
+            }
+        }
         if (calls.isEmpty()) {
-            return new Round(false, reasoning.toString(), text.toString(), finishReason.get());
+            return new Round(false, reasoning.toString(), visibleText.toString(), finishReason.get());
         }
         if (calls.size() > MAX_TOOL_CALLS_PER_ROUND) {
             calls = List.copyOf(calls.subList(0, MAX_TOOL_CALLS_PER_ROUND));
         }
+        String sanitizedAssistantText = DsmlToolCallSanitizer.stripDsml(rawText.toString());
         DeepSeekAssistantMessage assistant = DeepSeekAssistantMessage.builder()
-            .content(text.toString())
+            .content(sanitizedAssistantText)
             .reasoningContent(reasoning.isEmpty() ? null : reasoning.toString())
             .toolCalls(calls)
             .build();
@@ -215,7 +227,7 @@ public class SpringAiChatRunner {
         } finally {
             ToolActivity.clear();
         }
-        return new Round(true, reasoning.toString(), text.toString(), finishReason.get());
+        return new Round(true, reasoning.toString(), visibleText.toString(), finishReason.get());
     }
 
     private static int[] readUsage(ChatResponse chunk) {
@@ -248,8 +260,10 @@ public class SpringAiChatRunner {
 
     private void absorb(
         ChatResponse chunk,
-        StringBuilder text,
+        StringBuilder rawText,
+        StringBuilder visibleText,
         StringBuilder reasoning,
+        DsmlToolCallSanitizer.StreamFilter streamFilter,
         ToolCallBuffer toolCalls,
         StreamListener listener
     ) {
@@ -259,8 +273,8 @@ public class SpringAiChatRunner {
         AssistantMessage output = chunk.getResult().getOutput();
         String delta = output.getText();
         if (delta != null && !delta.isEmpty()) {
-            text.append(delta);
-            listener.onText(delta);
+            rawText.append(delta);
+            streamFilter.accept(delta, clean -> emitVisible(clean, visibleText, listener));
         }
         if (output instanceof DeepSeekAssistantMessage deepSeek
             && deepSeek.getReasoningContent() != null
@@ -271,19 +285,31 @@ public class SpringAiChatRunner {
         toolCalls.absorb(output.getToolCalls());
     }
 
+    private static void emitVisible(String clean, StringBuilder visibleText, StreamListener listener) {
+        if (clean != null && !clean.isEmpty()) {
+            visibleText.append(clean);
+            listener.onText(clean);
+        }
+    }
+
     private DeepSeekChatOptions options(boolean includeTools, boolean thinking) {
         DeepSeekChatOptions.Builder builder = DeepSeekChatOptions.builder()
             .model(model)
-            .maxTokens(maxOutputTokens);
+            .maxTokens(maxOutputTokens)
+            .toolCallbacks(toolCallbacks())
+            .toolChoice(includeTools ? "auto" : "none");
         if (thinking) {
             builder.enableThinking();
         } else {
             builder.disableThinking();
         }
-        if (includeTools) {
-            builder.toolCallbacks(toolCallbacks());
-        }
         return builder.build();
+    }
+
+    private Set<String> registeredToolNames() {
+        return toolCallbacks().stream()
+            .map(callback -> callback.getToolDefinition().name())
+            .collect(Collectors.toUnmodifiableSet());
     }
 
     private List<ToolCallback> toolCallbacks() {
@@ -306,7 +332,8 @@ public class SpringAiChatRunner {
     private static Message toMessage(PriorMessage prior) {
         String content = prior.content() == null ? "" : prior.content();
         if ("assistant".equals(prior.role())) {
-            DeepSeekAssistantMessage.Builder builder = DeepSeekAssistantMessage.builder().content(content);
+            String cleanContent = DsmlToolCallSanitizer.stripDsml(content);
+            DeepSeekAssistantMessage.Builder builder = DeepSeekAssistantMessage.builder().content(cleanContent);
             if (prior.reasoning() != null && !prior.reasoning().isBlank()) {
                 builder.reasoningContent(prior.reasoning());
             }
