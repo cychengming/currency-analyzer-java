@@ -6,44 +6,235 @@
     <title>Currency Market Analyzer - Dashboard</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.9.1/chart.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chartjs-chart-financial@0.2.1/dist/chartjs-chart-financial.min.js"></script>
-    <link rel="stylesheet" href="/static/styles.css?v=20261122-3">
+    <link rel="stylesheet" href="/static/styles.css?v=20261125-shell2">
 </head>
-<body>
-    <div class="dashboard" id="dashboard">
-        <div class="header">
-            <div class="header-brand">
-                <h1>Currency Market Analyzer</h1>
-                <p class="header-subtitle">Track markets, review alerts, run backtests, and manage forecasts from one dark, low-noise workspace.</p>
-            </div>
-            <div class="header-controls">
-                <div class="user-info" id="userInfo">Logged in as: —</div>
-                <div class="status-indicator">
-                    <div class="status-dot" id="statusDot"></div>
-                    <span id="statusText">Monitoring Inactive</span>
+<body class="app-shell-body">
+    <div class="dashboard app-shell" id="dashboard">
+        <!-- Slim Left Sidebar Navigation (5 focused workspaces + Settings) -->
+        <aside class="app-sidebar" id="appSidebar" aria-label="Workspace Navigation">
+            <div class="app-sidebar-top">
+                <div class="app-brand">
+                    <div class="app-brand-mark">CA</div>
+                    <div class="app-brand-copy">
+                        <div class="app-brand-title">Currency Analyzer</div>
+                        <div class="app-brand-sub">Markets · Alerts · RAG</div>
+                    </div>
                 </div>
-                <button class="btn-success" id="startBtn" onclick="startMonitoring()">Start Monitoring</button>
-                <button class="btn-danger" id="stopBtn" onclick="stopMonitoring()" style="display:none;">Stop Monitoring</button>
-                <button class="btn-secondary" id="refreshDashboardBtn" onclick="refreshDashboardNow()">Refresh Data</button>
-                <button class="btn-secondary" id="aiChatOpenButton" type="button" aria-controls="aiChatPanel" aria-expanded="false" hidden>Ask Currency Analyzer</button>
-                <button class="btn-danger" onclick="handleLogout()">Logout</button>
+
+                <nav class="app-nav" role="navigation">
+                    <div class="app-nav-label">Workspace</div>
+                    <button class="nav-tab app-nav-item active" data-page="overview" onclick="switchPage('overview', event); if (typeof showMarketsListView === 'function') showMarketsListView();">
+                        <span class="app-nav-text">Markets</span>
+                        <span class="app-nav-pill" id="navMarketsCount">—</span>
+                    </button>
+                    <button class="nav-tab app-nav-item" data-page="alerts" onclick="switchPage('alerts', event); if (typeof refreshAlertsV2 === 'function') refreshAlertsV2();">
+                        <span class="app-nav-text">Alerts</span>
+                        <span class="app-nav-pill app-nav-pill-warn" id="navAlertsUnreadBadge" hidden>0</span>
+                    </button>
+                    <button class="nav-tab app-nav-item" data-page="backtest" data-nav-group="lab" onclick="switchPage('backtest', event)">
+                        <span class="app-nav-text">Strategy &amp; AI Lab</span>
+                    </button>
+                    <button class="nav-tab app-nav-item" data-page="trade" onclick="switchPage('trade', event); initTradePage();">
+                        <span class="app-nav-text">Paper Trade</span>
+                    </button>
+                    <button class="nav-tab app-nav-item" data-page="knowledge" onclick="switchPage('knowledge', event); initKnowledgePage();">
+                        <span class="app-nav-text">Knowledge</span>
+                        <span class="app-nav-pill app-nav-pill-ok">RAG</span>
+                    </button>
+                </nav>
             </div>
-        </div>
 
-        <div class="nav-tabs">
-            <button class="nav-tab active" data-page="overview" onclick="switchPage('overview', event)">Overview</button>
-            <button class="nav-tab" data-page="alerts" onclick="switchPage('alerts', event)">Alert History</button>
-            <button class="nav-tab" data-page="manage" onclick="switchPage('manage', event)">Manage Alerts</button>
-            <button class="nav-tab" data-page="backtest" onclick="switchPage('backtest', event)">Backtest</button>
-            <button class="nav-tab" data-page="trade" onclick="switchPage('trade', event); initTradePage();">Trade</button>
-            <button class="nav-tab" data-page="forecast" onclick="switchPage('forecast', event); loadLatestForecast();">Forecast</button>
-            <button class="nav-tab" data-page="deepLearning" onclick="switchPage('deepLearning', event)">Deep Learning</button>
-            <button class="nav-tab" data-page="knowledge" onclick="switchPage('knowledge', event); initKnowledgePage();">Knowledge</button>
-            <button class="nav-tab" data-page="settings" onclick="switchPage('settings', event)">Settings</button>
-        </div>
+            <div class="app-sidebar-bottom">
+                <button class="nav-tab app-nav-item" data-page="settings" onclick="switchPage('settings', event)">
+                    <span class="app-nav-text">Settings</span>
+                </button>
+                <div class="app-user-card">
+                    <div class="user-info app-user-name" id="userInfo">Logged in as: —</div>
+                    <button class="btn-danger app-logout-btn" type="button" onclick="handleLogout()">Logout</button>
+                </div>
+            </div>
+        </aside>
 
-        <div id="pagesContainer"></div>
+        <!-- Main Workspace Column -->
+        <div class="app-main">
+            <!-- Compact 56px Top Utility Bar -->
+            <header class="app-topbar">
+                <div class="app-topbar-left">
+                    <button type="button" class="btn-secondary app-sidebar-toggle" id="sidebarToggleBtn" aria-label="Toggle navigation" onclick="document.getElementById('appSidebar').classList.toggle('open')">☰</button>
+                    <div class="app-search-wrap">
+                        <input type="text" id="globalPairSearch" class="app-search-input" placeholder="Search &amp; open pair detail (e.g. GOLD, EUR, NDX)..." autocomplete="off" aria-label="Search market pairs">
+                        <div class="app-search-results" id="globalPairResults" hidden></div>
+                    </div>
+                </div>
+
+                <div class="app-topbar-right">
+                    <div class="status-indicator app-monitoring-pill">
+                        <div class="status-dot" id="statusDot"></div>
+                        <span id="statusText">Monitoring Inactive</span>
+                    </div>
+                    <button class="btn-success app-compact-btn" id="startBtn" type="button" onclick="startMonitoring()">Start</button>
+                    <button class="btn-danger app-compact-btn" id="stopBtn" type="button" onclick="stopMonitoring()" style="display:none;">Stop</button>
+                    <button class="btn-secondary app-compact-btn" id="refreshDashboardBtn" type="button" onclick="refreshDashboardNow()">Refresh</button>
+
+                    <!-- Global Alert Bell Popover -->
+                    <div class="app-bell-wrap">
+                        <button type="button" class="btn-secondary app-bell-btn" id="topBellBtn" aria-label="Recent alerts" aria-expanded="false">
+                            <span>Alerts</span>
+                            <span class="app-bell-badge" id="topBellCount" hidden>0</span>
+                        </button>
+                        <div class="app-bell-popover" id="topBellPopover" hidden>
+                            <div class="app-bell-popover-head">
+                                <strong>My Recent Alerts</strong>
+                                <button type="button" class="app-link-btn" id="topBellMarkAllBtn">Mark all read</button>
+                            </div>
+                            <div class="app-bell-popover-list" id="topBellList">
+                                <div class="muted-copy">No alerts yet</div>
+                            </div>
+                            <button type="button" class="btn-secondary app-bell-footer-btn" onclick="document.getElementById('topBellPopover').hidden = true; switchPage('alerts');">Open Alerts Workspace</button>
+                        </div>
+                    </div>
+
+                    <button class="btn-primary app-compact-btn" id="aiChatOpenButton" type="button" aria-controls="aiChatPanel" aria-expanded="false" hidden>Ask AI</button>
+                </div>
+            </header>
+
+            <!-- Strategy & AI Lab Sub-Navigation Bar (visible only on Backtest / Forecast / Deep Learning) -->
+            <div class="app-lab-subnav" id="labSubnav" hidden>
+                <div class="app-lab-subnav-title">Strategy &amp; AI Lab</div>
+                <div class="app-lab-subnav-tabs">
+                    <button type="button" class="app-subtab" data-lab-page="backtest" onclick="switchPage('backtest')">Backtest</button>
+                    <button type="button" class="app-subtab" data-lab-page="forecast" onclick="switchPage('forecast'); if (typeof loadLatestForecast === 'function') loadLatestForecast();">Forecast</button>
+                    <button type="button" class="app-subtab" data-lab-page="deepLearning" onclick="switchPage('deepLearning')">Deep Learning</button>
+                </div>
+            </div>
+
+            <main class="app-content">
+                <div id="pagesContainer"></div>
+            </main>
+        </div>
     </div>
 
+    <!-- Global Popup Alert Rule Builder Modal (Create / Edit / Delete) -->
+    <div class="app-modal-backdrop" id="alertRuleModal" role="dialog" aria-modal="true" aria-labelledby="alertModalTitle" hidden>
+        <div class="app-modal-dialog">
+            <div class="app-modal-header">
+                <div>
+                    <h2 id="alertModalTitle">New Alert Rule</h2>
+                    <p class="muted-copy" id="alertModalSubtitle">Personal rule saved to your watchlist.</p>
+                </div>
+                <div class="app-modal-header-right">
+                    <span class="status-pill status-pill-muted" id="alertModalBadge">Armed</span>
+                    <button type="button" class="btn-secondary app-icon-close" id="alertModalCloseBtn" aria-label="Close">✕</button>
+                </div>
+            </div>
+
+            <div class="app-modal-grid-3">
+                <div class="form-group">
+                    <label for="alertModalPair">Market Pair</label>
+                    <select id="alertModalPair"></select>
+                </div>
+                <div class="form-group">
+                    <label for="alertModalCondition">Condition</label>
+                    <select id="alertModalCondition">
+                        <option value="cross_above">Price Crosses Above</option>
+                        <option value="cross_below">Price Crosses Below</option>
+                        <option value="pct_move">% Move (1d / 7d / 30d)</option>
+                        <option value="ma_crossover">MA Crossover</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="alertModalNickname">Nickname (optional)</label>
+                    <input type="text" id="alertModalNickname" maxlength="120" placeholder="e.g. Gold Breakout">
+                </div>
+            </div>
+
+            <!-- Live Spot Context + Mini Sparkline + Synced Numeric Input & Slider -->
+            <div class="app-modal-preview">
+                <div class="app-modal-preview-head">
+                    <div>
+                        <strong id="alertModalPreviewPair">GOLD/USD</strong>
+                        <span class="muted-copy"> · Live Spot: <strong id="alertModalSpot">—</strong></span>
+                        <span class="muted-copy" id="alertModalRangeText"></span>
+                    </div>
+                    <span class="app-mono-muted" id="alertModalDistance">—</span>
+                </div>
+                <canvas id="alertModalCanvas" class="app-modal-canvas" height="120"></canvas>
+
+                <div class="app-modal-target-row" id="alertModalTargetRow">
+                    <div class="form-group" style="margin:0;">
+                        <label for="alertModalTargetNum" id="alertModalTargetLabel">Target Price</label>
+                        <input type="number" id="alertModalTargetNum" step="any">
+                    </div>
+                    <div class="form-group" style="margin:0;">
+                        <div class="app-slider-head">
+                            <span class="muted-copy">Slide on range</span>
+                            <span class="app-mono-muted" id="alertModalSliderPct">—</span>
+                        </div>
+                        <input type="range" id="alertModalTargetSlider" min="0" max="100" value="60">
+                    </div>
+                </div>
+
+                <div class="app-modal-grid-3" id="alertModalExtraRow" hidden>
+                    <div class="form-group" id="alertModalWindowWrap" style="margin:0;">
+                        <label for="alertModalWindow">Lookback Window</label>
+                        <select id="alertModalWindow">
+                            <option value="1">1 Day</option>
+                            <option value="7">7 Days</option>
+                            <option value="30" selected>30 Days</option>
+                        </select>
+                    </div>
+                    <div class="form-group" id="alertModalMaShortWrap" style="margin:0;" hidden>
+                        <label for="alertModalMaShort">Short MA (days)</label>
+                        <input type="number" id="alertModalMaShort" min="2" max="200" value="20">
+                    </div>
+                    <div class="form-group" id="alertModalMaLongWrap" style="margin:0;" hidden>
+                        <label for="alertModalMaLong">Long MA (days)</label>
+                        <input type="number" id="alertModalMaLong" min="3" max="365" value="50">
+                    </div>
+                    <div class="form-group" id="alertModalSignalWrap" style="margin:0;" hidden>
+                        <label for="alertModalSignalType">Signal Direction</label>
+                        <select id="alertModalSignalType">
+                            <option value="both">Both (Golden &amp; Death)</option>
+                            <option value="golden_cross">Golden Cross</option>
+                            <option value="death_cross">Death Cross</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+
+            <div class="app-modal-grid-2">
+                <div class="form-group" style="margin:0;">
+                    <label for="alertModalFrequency">After It Fires</label>
+                    <select id="alertModalFrequency">
+                        <option value="ONCE:3600" selected>Notify Once (Auto turns off)</option>
+                        <option value="RECURRING:3600">Recurring (Max once per 1 hour)</option>
+                        <option value="RECURRING:14400">Recurring (Max once per 4 hours)</option>
+                        <option value="RECURRING:86400">Recurring (Max once per day)</option>
+                    </select>
+                </div>
+                <div class="form-group" style="margin:0;">
+                    <label>Delivery</label>
+                    <div class="app-delivery-row">
+                        <label class="app-check-chip"><input type="checkbox" checked disabled> In-App</label>
+                        <label class="app-check-chip"><input type="checkbox" id="alertModalNotifyEmail" checked> My Email (<span id="alertModalEmailHint">not set</span>)</label>
+                    </div>
+                </div>
+            </div>
+
+            <div class="inline-banner" id="alertModalNotice" style="display:none;"></div>
+            <p class="muted-copy" id="alertModalHint"></p>
+
+            <div class="app-modal-footer">
+                <button type="button" class="btn-danger" id="alertModalDeleteBtn" hidden>Delete Rule</button>
+                <div class="app-modal-footer-right">
+                    <button type="button" class="btn-secondary" id="alertModalCancelBtn">Cancel</button>
+                    <button type="button" class="btn-primary" id="alertModalSaveBtn">Create Rule</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Persistent Slide-Out RAG AI Assistant Drawer -->
     <aside class="ai-chat-panel" id="aiChatPanel" aria-label="Ask Currency Analyzer" hidden>
         <button type="button" class="ai-chat-resize" id="aiChatResize" aria-label="Resize assistant" aria-orientation="vertical" aria-valuemin="320" aria-valuemax="960" aria-valuenow="440"></button>
         <div class="ai-chat-header">
@@ -74,9 +265,10 @@
 
     <div class="toast" id="toast"></div>
 
-    <script src="/static/utils.js?v=20261113"></script>
+    <script src="/static/utils.js?v=20261125-shell2"></script>
     <script src="/static/auth.js?v=20261113"></script>
-    <script src="/static/dashboard.js?v=20261123"></script>
+    <script src="/static/dashboard.js?v=20261125-shell2"></script>
+    <script src="/static/pages/markets_alerts.js?v=20261125-shell2"></script>
     <script src="/static/pages/overview.js?v=20261113"></script>
     <script src="/static/pages/alerts.js?v=20261113"></script>
     <script src="/static/pages/manage.js?v=20261113"></script>
@@ -85,6 +277,6 @@
     <script src="/static/pages/deep_learning.js?v=20261113"></script>
     <script src="/static/pages/knowledge.js?v=20261123"></script>
     <script src="/static/pages/settings.js?v=20261113"></script>
-    <script src="/static/ai-chat.js?v=20261121-springai"></script>
+    <script src="/static/ai-chat.js?v=20261125-shell2"></script>
 </body>
 </html>

@@ -24,6 +24,15 @@
         document.getElementById('aiChatStopButton').addEventListener('click', stopResponse);
         installPanelResize(panel);
         panel.hidden = true;
+
+        window.openAiChatWithPrompt = async function openAiChatWithPrompt(promptText) {
+            await openChat();
+            const input = document.getElementById('aiChatInput');
+            if (input && typeof promptText === 'string' && promptText.trim()) {
+                input.value = promptText.trim();
+                input.focus();
+            }
+        };
     }
 
     function installPanelResize(panel) {

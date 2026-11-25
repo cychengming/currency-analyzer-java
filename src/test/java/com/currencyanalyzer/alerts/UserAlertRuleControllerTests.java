@@ -254,6 +254,18 @@ class UserAlertRuleControllerTests {
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"pair\":\"GOLD/USD\",\"condition_type\":\"cross_above\",\"target_value\":-5}"))
             .andExpect(status().isBadRequest());
+
+        // Phase B static shell & Alerts 2.0 assets are served cleanly
+        mockMvc.perform(get("/dashboard.html"))
+            .andExpect(status().isOk())
+            .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.content()
+                .string(org.hamcrest.Matchers.containsString("alertRuleModal")))
+            .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.content()
+                .string(org.hamcrest.Matchers.containsString("markets_alerts.js")));
+        mockMvc.perform(get("/static/pages/markets_alerts.js"))
+            .andExpect(status().isOk())
+            .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.content()
+                .string(org.hamcrest.Matchers.containsString("openAlertRuleModal")));
     }
 
     private MockHttpSession registerAndLogin(String username) throws Exception {
