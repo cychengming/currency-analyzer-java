@@ -361,6 +361,20 @@ gcloud run services update-traffic currency-analyzer-java \
 2. Confirm `verify` + `build-and-deploy` succeed and `curl -fsS "$SERVICE_URL/actuator/health/readiness"` returns `200 OK`.
 3. Verify on the deployed `https://*.run.app` service:
    - Login cookie includes `Secure; HttpOnly; SameSite=Lax`.
-   - Flyway `V1`–`V7` ran against Cloud SQL PG16 (`pgvector` HNSW + `pg_trgm` GIN active).
+   - Flyway `V1`–`V8` ran against Cloud SQL PG16 (`pgvector` HNSW + `pg_trgm` GIN active, plus Alerts 2.0 schema in `V8`).
    - Knowledge Base displays **GCS (`currency-analyze`)** + **`pgvector (384-dim cosine)`** and syncs/searches without downloading from HuggingFace.
    - Live Exchange Rates, Historical charts, and AI Assistant SSE streaming work end-to-end.
+
+---
+
+## 7. Production Deployment Incident & Troubleshooting Log
+
+### 2026-11-25 — Cloud Run Startup Failure: Flyway Duplicate Version `V6` (Run `#45551328040`)
+
+| Field | Details |
+|---|---|
+| **Failed Run / Revision** | GitHub Actions run [`45551328040`](https://github.com/cychengming/currency-analyzer-java/actions/runs/45551328040) (`master` commit `e600761`, PR #14) — Cloud Run revision `currency-analyzer-java-00010-jvk` |
+| **Symptom** | `verify` and Docker image build passed, but `Deploy to Cloud Run` failed after ~41s with: `The user-provided container failed to start and listen on the port defined provided by the PORT=8080 environment variable within the allocated timeout.` |
+| **Root Cause** | Production `src/main/resources/application.yml` configures Flyway with `locations: classpath:db/migration,classpath:db/postgresql-migration`, whereas test `src/test/resources/application.yml` only scans `classpath:db/migration` (so H2 skips PostgreSQL-only DDL). PR #14 added `src/main/resources/db/migration/V6__user_alert_rules.sql`, colliding with `src/main/resources/db/postgresql-migration/V6__rag_pgvector.sql` (and preceding `V7__rag_pg_trgm.sql`, both already applied to Cloud SQL). Spring Boot crashed immediately at startup with:<br>`FlywayException: Found more than one migration with version 6`<br>`-> db/migration/V6__user_alert_rules.sql`<br>`-> db/postgresql-migration/V6__rag_pgvector.sql` |
+| **Fix (PR #16)** | 1. Renamed `V6__user_alert_rules.sql` → `src/main/resources/db/migration/V8__user_alert_rules.sql` (applies after existing `V6`/`V7` on Cloud SQL, and H2 handles the `V5 -> V8` version gap cleanly).<br>2. Added `src/test/java/com/currencyanalyzer/migration/FlywayMigrationIntegrityTests.java` to validate both production Flyway locations together (`flyway.info()`) for globally unique ascending versions and verify H2 migration execution.<br>3. Documented the cross-folder Flyway version uniqueness rule in `AGENTS.md`. |
+| **Guardrail for Future Migrations** | Always inspect **both** `src/main/resources/db/migration/` and `src/main/resources/db/postgresql-migration/` before choosing a `V<n>` version number. Never reuse or precede a version already applied to Cloud SQL (after `V8`, the next migration must be `V9+`). |
