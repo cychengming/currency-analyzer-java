@@ -219,7 +219,7 @@ public class UserAlertRuleRepository {
         double triggerValue,
         double thresholdValue
     ) {
-        OffsetDateTime ts = toOffsetDateTime(timestamp);
+        OffsetDateTime ts = OffsetDateTime.ofInstant(timestamp, ZoneOffset.UTC);
         KeyHolder keyHolder = new GeneratedKeyHolder();
         jdbcClient.sql("""
                 INSERT INTO alerts (
