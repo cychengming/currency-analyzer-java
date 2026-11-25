@@ -17,6 +17,7 @@ import java.util.Arrays;
 import java.util.HashSet;
 import java.util.HexFormat;
 import java.util.List;
+import java.util.Locale;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
@@ -26,6 +27,14 @@ import java.util.UUID;
 public class RagDocumentService {
 
     private static final Logger log = LoggerFactory.getLogger(RagDocumentService.class);
+    private static final String EVENT_OBJECT_FINALIZE = "OBJECT_FINALIZE";
+    private static final String EVENT_OBJECT_DELETE = "OBJECT_DELETE";
+    private static final String EVENT_OBJECT_ARCHIVE = "OBJECT_ARCHIVE";
+    private static final String STATUS_INDEXED = "indexed";
+    private static final String STATUS_DELETED = "deleted";
+    private static final String STATUS_SKIPPED = "skipped";
+    private static final String STATUS_IGNORED = "ignored";
+    private static final String ACTOR_PUBSUB_GCS = "pubsub-gcs";
 
     private final RagDocumentRepository repository;
     private final ObjectStorageClient storageClient;
@@ -224,6 +233,205 @@ public class RagDocumentService {
             }
         }
         return recovered;
+    }
+
+    public StorageEventResult handleStorageObjectEvent(StorageObjectEvent event) {
+        if (event == null || event.eventType() == null || event.eventType().isBlank()
+            || event.objectKey() == null || event.objectKey().isBlank()) {
+            throw new IllegalArgumentException("Storage event requires eventType and objectKey");
+        }
+        String objectKey = event.objectKey().replace('\\', '/').trim();
+        if (!matchesConfiguredBucket(event.bucket())) {
+            return new StorageEventResult(STATUS_IGNORED, "bucket_mismatch", objectKey, null);
+        }
+        if (!isWithinConfiguredPrefix(objectKey)) {
+            return new StorageEventResult(STATUS_IGNORED, "outside_prefix", objectKey, null);
+        }
+
+        String normalizedType = event.eventType().trim().toUpperCase(Locale.ROOT);
+        return switch (normalizedType) {
+            case EVENT_OBJECT_FINALIZE -> handleObjectFinalize(objectKey, event.generation());
+            case EVENT_OBJECT_DELETE, EVENT_OBJECT_ARCHIVE ->
+                handleObjectDelete(objectKey, event.generation(), event.overwrittenByGeneration());
+            default -> new StorageEventResult(STATUS_IGNORED, "unsupported_event_type", objectKey, null);
+        };
+    }
+
+    private StorageEventResult handleObjectFinalize(String objectKey, String generation) {
+        String filename = extractFilename(objectKey);
+        if (!documentParser.supports(filename)) {
+            return new StorageEventResult(STATUS_IGNORED, "unsupported_file_type", objectKey, null);
+        }
+
+        Optional<RagDocument> existingOpt = repository.findByStorage(storageClient.providerName(), objectKey);
+        if (existingOpt.isPresent()) {
+            StorageEventResult precheck = checkExistingFinalize(existingOpt.get(), generation, objectKey);
+            if (precheck != null) {
+                return precheck;
+            }
+        }
+
+        Optional<byte[]> bytesOpt = storageClient.get(objectKey);
+        if (bytesOpt.isEmpty()) {
+            return new StorageEventResult(STATUS_SKIPPED, "object_not_found", objectKey, null);
+        }
+        byte[] rawBytes = bytesOpt.get();
+        if (rawBytes.length == 0 || rawBytes.length > maxFileSizeBytes) {
+            return new StorageEventResult(STATUS_IGNORED, "invalid_file_size", objectKey, null);
+        }
+
+        String sha256 = sha256Hex(rawBytes);
+        if (existingOpt.isPresent()
+            && RagDocument.STATUS_READY.equals(existingOpt.get().status())
+            && sha256.equals(existingOpt.get().sha256())) {
+            return new StorageEventResult(STATUS_SKIPPED, "unchanged_content", objectKey, existingOpt.get().id());
+        }
+
+        DocumentParser.ParsedDocument parsed;
+        try {
+            parsed = documentParser.parse(filename, rawBytes, null);
+        } catch (IllegalArgumentException exception) {
+            log.debug("Skipping unparseable storage object {}: {}", objectKey, exception.getMessage());
+            return new StorageEventResult(STATUS_IGNORED, "unparseable_content", objectKey, null);
+        }
+
+        UUID documentId = upsertStorageDocument(
+            existingOpt,
+            objectKey,
+            filename,
+            parsed.title(),
+            rawBytes.length,
+            sha256,
+            generation
+        );
+        ingestionService.ingestNow(documentId, sha256, filename, null, rawBytes);
+        return new StorageEventResult(STATUS_INDEXED, null, objectKey, documentId);
+    }
+
+    private StorageEventResult handleObjectDelete(
+        String objectKey,
+        String generation,
+        String overwrittenByGeneration
+    ) {
+        if (overwrittenByGeneration != null && !overwrittenByGeneration.isBlank()) {
+            return new StorageEventResult(STATUS_SKIPPED, "overwritten_by_newer_generation", objectKey, null);
+        }
+        Optional<RagDocument> existingOpt = repository.findByStorage(storageClient.providerName(), objectKey);
+        if (existingOpt.isEmpty()) {
+            return new StorageEventResult(STATUS_SKIPPED, "document_not_found", objectKey, null);
+        }
+        RagDocument existing = existingOpt.get();
+        if (existing.isBuiltin()) {
+            return new StorageEventResult(STATUS_SKIPPED, "builtin_protected", objectKey, existing.id());
+        }
+        if (isStaleDeleteGeneration(generation, existing.storageGeneration())) {
+            return new StorageEventResult(STATUS_SKIPPED, "stale_generation", objectKey, existing.id());
+        }
+        ingestionService.cancelPending(existing.id());
+        boolean deleted = repository.deleteById(existing.id());
+        if (!deleted) {
+            return new StorageEventResult(STATUS_SKIPPED, "document_not_found", objectKey, existing.id());
+        }
+        log.info("Deleted RAG document {} ({}) via storage event", existing.id(), objectKey);
+        return new StorageEventResult(STATUS_DELETED, null, objectKey, existing.id());
+    }
+
+    private StorageEventResult checkExistingFinalize(
+        RagDocument existing,
+        String incomingGeneration,
+        String objectKey
+    ) {
+        Integer cmp = compareGenerations(incomingGeneration, existing.storageGeneration());
+        if (cmp != null && cmp < 0) {
+            return new StorageEventResult(STATUS_SKIPPED, "stale_generation", objectKey, existing.id());
+        }
+        if (cmp != null && cmp == 0 && !RagDocument.STATUS_FAILED.equals(existing.status())) {
+            return new StorageEventResult(STATUS_SKIPPED, "already_indexed_or_in_progress", objectKey, existing.id());
+        }
+        return null;
+    }
+
+    private UUID upsertStorageDocument(
+        Optional<RagDocument> existingOpt,
+        String objectKey,
+        String filename,
+        String title,
+        long sizeBytes,
+        String sha256,
+        String generation
+    ) {
+        String contentType = documentParser.inferContentType(filename);
+        Instant now = clock.instant();
+        if (existingOpt.isPresent()) {
+            UUID documentId = existingOpt.get().id();
+            repository.updateForReindex(documentId, filename, title, contentType, sizeBytes, sha256, generation, now);
+            return documentId;
+        }
+        UUID documentId = UUID.randomUUID();
+        RagDocument created = new RagDocument(
+            documentId,
+            RagDocument.SOURCE_UPLOAD,
+            filename,
+            title,
+            contentType,
+            sizeBytes,
+            sha256,
+            storageClient.providerName(),
+            storageClient.bucketName(),
+            objectKey,
+            generation,
+            RagDocument.STATUS_PENDING,
+            0,
+            null,
+            ACTOR_PUBSUB_GCS,
+            now,
+            now
+        );
+        repository.insert(created);
+        return documentId;
+    }
+
+    private boolean matchesConfiguredBucket(String eventBucket) {
+        String configuredBucket = storageClient.bucketName();
+        if (eventBucket == null || eventBucket.isBlank() || configuredBucket == null || configuredBucket.isBlank()) {
+            return true;
+        }
+        return configuredBucket.equals(eventBucket.trim());
+    }
+
+    private boolean isWithinConfiguredPrefix(String objectKey) {
+        if (objectKey.startsWith("/") || objectKey.endsWith("/") || objectKey.contains("..")) {
+            return false;
+        }
+        if (defaultPrefix.isEmpty()) {
+            return true;
+        }
+        return objectKey.startsWith(defaultPrefix + "/");
+    }
+
+    private static boolean isStaleDeleteGeneration(String incomingGeneration, String storedGeneration) {
+        if (incomingGeneration == null || incomingGeneration.isBlank()
+            || storedGeneration == null || storedGeneration.isBlank()) {
+            return false;
+        }
+        return !incomingGeneration.trim().equals(storedGeneration.trim());
+    }
+
+    private static Integer compareGenerations(String incomingGeneration, String storedGeneration) {
+        if (incomingGeneration == null || incomingGeneration.isBlank()
+            || storedGeneration == null || storedGeneration.isBlank()) {
+            return null;
+        }
+        String left = incomingGeneration.trim();
+        String right = storedGeneration.trim();
+        if (left.equals(right)) {
+            return 0;
+        }
+        try {
+            return Long.compare(Long.parseLong(left), Long.parseLong(right));
+        } catch (NumberFormatException exception) {
+            return null;
+        }
     }
 
     public List<RagDocument> list() {
@@ -467,6 +675,23 @@ public class RagDocumentService {
         long maxFileSizeBytes,
         boolean pgVectorEnabled,
         boolean canManage
+    ) {
+    }
+
+    public record StorageObjectEvent(
+        String eventType,
+        String bucket,
+        String objectKey,
+        String generation,
+        String overwrittenByGeneration
+    ) {
+    }
+
+    public record StorageEventResult(
+        String status,
+        String reason,
+        String objectKey,
+        UUID documentId
     ) {
     }
 }

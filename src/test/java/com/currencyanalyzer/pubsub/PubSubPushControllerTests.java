@@ -1,12 +1,20 @@
 package com.currencyanalyzer.pubsub;
 
 import com.currencyanalyzer.CurrencyAnalyzerApplication;
+import com.currencyanalyzer.ai.rag.RagDocument;
+import com.currencyanalyzer.ai.rag.RagDocumentRepository;
 import com.currencyanalyzer.alerts.AlertMonitoringRepository;
 import com.currencyanalyzer.alerts.AlertMonitoringRepository.AlertEntry;
 import com.currencyanalyzer.marketdata.LiveRate;
 import com.currencyanalyzer.marketdata.MarketDataService;
+import com.currencyanalyzer.storage.ObjectStorageClient;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.currencyanalyzer.ai.rag.RagDocumentService;
+import com.currencyanalyzer.ai.rag.RagDocumentService.StorageEventResult;
+import com.currencyanalyzer.alerts.AlertEvaluationService;
+import com.currencyanalyzer.alerts.AlertNotificationService;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
@@ -25,10 +33,12 @@ import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -51,6 +61,12 @@ class PubSubPushControllerTests {
 
     @Autowired
     private AlertMonitoringRepository repository;
+
+    @Autowired
+    private ObjectStorageClient objectStorageClient;
+
+    @Autowired
+    private RagDocumentRepository ragDocumentRepository;
 
     @MockitoBean
     private PubSubOidcVerifier oidcVerifier;
@@ -189,6 +205,180 @@ class PubSubPushControllerTests {
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{}"))
             .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void handlesGcsRagSyncFinalizeDataFallbackAndDeleteWithOidcAuth() throws Exception {
+        when(oidcVerifier.verifyAuthorizationHeader(VALID_BEARER))
+            .thenReturn(Optional.of("pubsub-invoker@project-3806d7a4-0bd7-416f-8c4.iam.gserviceaccount.com"));
+
+        // 1. Anonymous and admin-user requests (without ROLE_PUBSUB_PUSH) to /internal/pubsub/gcs-rag-sync are rejected with 403
+        mockMvc.perform(post("/internal/pubsub/gcs-rag-sync"))
+            .andExpect(status().isForbidden());
+        mockMvc.perform(post("/internal/pubsub/gcs-rag-sync").with(user("admin").roles("ADMIN")))
+            .andExpect(status().isForbidden());
+
+        String primaryKey = "knowledge/pubsub-sync-macro.md";
+        String fallbackKey = "knowledge/pubsub-sync-fallback.md";
+        String bucket = objectStorageClient.bucketName();
+        try {
+            objectStorageClient.put(
+                primaryKey,
+                "# FX Macro Brief\n\nCentral bank rate expectations moved EUR/USD and GOLD/USD sharply.\n".getBytes(StandardCharsets.UTF_8),
+                "text/markdown"
+            );
+            objectStorageClient.put(
+                fallbackKey,
+                "# Commodities Note\n\nWTI/USD and COPPER/USD reacted to global PMI surprises.\n".getBytes(StandardCharsets.UTF_8),
+                "text/markdown"
+            );
+
+            // 2. OBJECT_FINALIZE via Pub/Sub message attributes indexes synchronously
+            String finalizeBody = """
+                {
+                  "message": {
+                    "messageId": "gcs-finalize-1",
+                    "attributes": {
+                      "eventType": "OBJECT_FINALIZE",
+                      "bucketId": "%s",
+                      "objectId": "%s",
+                      "objectGeneration": "1700000001"
+                    }
+                  },
+                  "subscription": "projects/demo/subscriptions/rag-storage-events-push"
+                }
+                """.formatted(bucket, primaryKey);
+
+            mockMvc.perform(post("/internal/pubsub/gcs-rag-sync")
+                    .header(HttpHeaders.AUTHORIZATION, VALID_BEARER)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content(finalizeBody))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("indexed"))
+                .andExpect(jsonPath("$.objectKey").value(primaryKey))
+                .andExpect(jsonPath("$.documentId").isNotEmpty());
+
+            RagDocument indexed = ragDocumentRepository
+                .findByStorage(objectStorageClient.providerName(), primaryKey)
+                .orElseThrow();
+            assertThat(indexed.status()).isEqualTo(RagDocument.STATUS_READY);
+            assertThat(indexed.chunkCount()).isGreaterThan(0);
+            assertThat(indexed.storageGeneration()).isEqualTo("1700000001");
+
+            // 3. Duplicate OBJECT_FINALIZE with same generation is skipped idempotently
+            mockMvc.perform(post("/internal/pubsub/gcs-rag-sync")
+                    .header(HttpHeaders.AUTHORIZATION, VALID_BEARER)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content(finalizeBody))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("skipped"))
+                .andExpect(jsonPath("$.reason").value("already_indexed_or_in_progress"));
+
+            // 4. Payload fallback extracts bucket, name, and generation from base64 JSON data
+            String payloadJson = """
+                {"bucket":"%s","name":"%s","generation":"1700000002"}
+                """.formatted(bucket, fallbackKey);
+            String encodedPayload = Base64.getEncoder().encodeToString(payloadJson.getBytes(StandardCharsets.UTF_8));
+            String fallbackBody = """
+                {
+                  "message": {
+                    "messageId": "gcs-finalize-2",
+                    "data": "%s",
+                    "attributes": {
+                      "eventType": "OBJECT_FINALIZE"
+                    }
+                  }
+                }
+                """.formatted(encodedPayload);
+
+            mockMvc.perform(post("/internal/pubsub/gcs-rag-sync")
+                    .header(HttpHeaders.AUTHORIZATION, VALID_BEARER)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content(fallbackBody))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("indexed"))
+                .andExpect(jsonPath("$.objectKey").value(fallbackKey));
+
+            assertThat(ragDocumentRepository.findByStorage(objectStorageClient.providerName(), fallbackKey))
+                .isPresent();
+
+            // 5. OBJECT_DELETE prunes the indexed document when generation matches
+            String deleteBody = """
+                {
+                  "message": {
+                    "messageId": "gcs-delete-1",
+                    "attributes": {
+                      "eventType": "OBJECT_DELETE",
+                      "bucketId": "%s",
+                      "objectId": "%s",
+                      "objectGeneration": "1700000001"
+                    }
+                  }
+                }
+                """.formatted(bucket, primaryKey);
+
+            mockMvc.perform(post("/internal/pubsub/gcs-rag-sync")
+                    .header(HttpHeaders.AUTHORIZATION, VALID_BEARER)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content(deleteBody))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("deleted"))
+                .andExpect(jsonPath("$.objectKey").value(primaryKey));
+
+            assertThat(ragDocumentRepository.findByStorage(objectStorageClient.providerName(), primaryKey))
+                .isEmpty();
+
+            // 6. Malformed GCS Pub/Sub payloads return 400 Bad Request
+            mockMvc.perform(post("/internal/pubsub/gcs-rag-sync")
+                    .header(HttpHeaders.AUTHORIZATION, VALID_BEARER)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content("{}"))
+                .andExpect(status().isBadRequest());
+            mockMvc.perform(post("/internal/pubsub/gcs-rag-sync")
+                    .header(HttpHeaders.AUTHORIZATION, VALID_BEARER)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content("{\"message\":{\"attributes\":{\"eventType\":\"OBJECT_FINALIZE\"}}}"))
+                .andExpect(status().isBadRequest());
+            String invalidJson = Base64.getEncoder().encodeToString("{not-json".getBytes(StandardCharsets.UTF_8));
+            mockMvc.perform(post("/internal/pubsub/gcs-rag-sync")
+                    .header(HttpHeaders.AUTHORIZATION, VALID_BEARER)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content("{\"message\":{\"data\":\"" + invalidJson + "\",\"attributes\":{\"eventType\":\"OBJECT_FINALIZE\"}}}"))
+                .andExpect(status().isBadRequest());
+        } finally {
+            objectStorageClient.delete(primaryKey);
+            objectStorageClient.delete(fallbackKey);
+            ragDocumentRepository.findByStorage(objectStorageClient.providerName(), primaryKey)
+                .ifPresent(doc -> ragDocumentRepository.deleteById(doc.id()));
+            ragDocumentRepository.findByStorage(objectStorageClient.providerName(), fallbackKey)
+                .ifPresent(doc -> ragDocumentRepository.deleteById(doc.id()));
+        }
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void skipsGcsRagSyncWhenRagServiceIsUnavailable() {
+        ObjectProvider<RagDocumentService> emptyProvider = mock(ObjectProvider.class);
+        when(emptyProvider.getIfAvailable()).thenReturn(null);
+        PubSubPushController controller = new PubSubPushController(
+            mock(AlertEvaluationService.class),
+            mock(AlertNotificationService.class),
+            emptyProvider
+        );
+
+        StorageEventResult result = controller.handleGcsRagSync(new PubSubPushController.PubSubPushEnvelope(
+            new PubSubPushController.PubSubMessage(
+                null,
+                "msg-disabled",
+                null,
+                Map.of("eventType", "OBJECT_FINALIZE", "objectId", "knowledge/note.md")
+            ),
+            "projects/demo/subscriptions/rag-storage-events-push"
+        ));
+
+        assertThat(result.status()).isEqualTo("skipped");
+        assertThat(result.reason()).isEqualTo("rag_disabled");
+        assertThat(result.objectKey()).isEqualTo("knowledge/note.md");
     }
 
     private MockHttpSession registerAndLogin(String username) throws Exception {
