@@ -19,6 +19,7 @@
 ## Database & Flyway Migrations
 - Flyway scans `classpath:db/migration` recursively. Never place PostgreSQL-only DDL (`CREATE EXTENSION`, `pgvector`, `pg_trgm`, GIN/HNSW indexes) in any subdirectory under `src/main/resources/db/migration/`.
 - Place PostgreSQL-only migrations in the sibling folder `src/main/resources/db/postgresql-migration/` (excluded from H2 tests in `src/test/resources/application.yml`), and guard extension creation with `pg_available_extensions`.
+- Production loads both `db/migration` and `db/postgresql-migration` together: always assign globally unique, strictly increasing `V<n>` version numbers across **both** folders (never collide with or precede versions already applied to Cloud SQL).
 
 ## Java 25, Spring Boot 4 & SonarCloud Guardrails
 - Avoid registering multiple `@Component` beans implementing the same interface (triggers Sonar `java:S9352`); prefer a single `@Bean` factory method in a `@Configuration` class.
