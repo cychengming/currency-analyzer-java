@@ -24,6 +24,7 @@ import java.util.function.BooleanSupplier;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -307,6 +308,25 @@ class AiUsageAndMetricsTests {
                 convId.toString()
             );
             assertEquals("resp-spring-1", storedRespId);
+
+            List<AiMessage> loadedMessages = convRepo.findConversationMessages(convId);
+            assertEquals(2, loadedMessages.size());
+            AiMessage assistantMsg = loadedMessages.stream()
+                .filter(message -> "assistant".equals(message.role()))
+                .findFirst()
+                .orElseThrow();
+            assertEquals(1, assistantMsg.toolCalls().size());
+            assertEquals("get_live_rates", assistantMsg.toolCalls().getFirst().tool());
+            assertEquals("{}", assistantMsg.toolCalls().getFirst().arguments());
+            assertEquals("ok", assistantMsg.toolCalls().getFirst().status());
+            assertEquals(12, assistantMsg.toolCalls().getFirst().durationMs());
+            assertTrue(assistantMsg.toolCalls().getFirst().summary().contains("pair_count"));
+
+            assertNull(AiConversationRepository.normalizeJsonColumn(null));
+            assertNull(AiConversationRepository.normalizeJsonColumn("   "));
+            assertEquals("{\"pair\":\"EUR/USD\"}", AiConversationRepository.normalizeJsonColumn("\"{\\\"pair\\\":\\\"EUR/USD\\\"}\""));
+            assertEquals("{\"pair\":\"EUR/USD\"}", AiConversationRepository.normalizeJsonColumn("{\"pair\":\"EUR/USD\"}"));
+            assertEquals("\"not-json", AiConversationRepository.normalizeJsonColumn("\"not-json"));
 
             // Second call triggers provider failure after reporting prompt usage -> recorded under outcome=error and releases slots
             assertTrue(service.streamMessage("alice", convId, "Trigger error", new SseEmitter(10_000L)));

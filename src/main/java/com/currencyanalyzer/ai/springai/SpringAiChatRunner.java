@@ -236,7 +236,12 @@ public class SpringAiChatRunner {
         ToolActivity.bind(new ToolActivity.Listener() {
             @Override
             public void started(String name) {
-                listener.onToolStarted(name);
+                listener.onToolStarted(name, "{}");
+            }
+
+            @Override
+            public void started(String name, String argumentsJson) {
+                listener.onToolStarted(name, argumentsJson);
             }
 
             @Override
@@ -384,6 +389,10 @@ public class SpringAiChatRunner {
 
         void onToolStarted(String name);
 
+        default void onToolStarted(String name, String argumentsJson) {
+            onToolStarted(name);
+        }
+
         void onToolFinished(String name, String argumentsJson, String result, int durationMs);
 
         default void onUsage(int inputTokens, int outputTokens) {
@@ -412,6 +421,11 @@ public class SpringAiChatRunner {
                 @Override
                 public void onToolStarted(String name) {
                     listener.onToolStarted(name);
+                }
+
+                @Override
+                public void onToolStarted(String name, String argumentsJson) {
+                    listener.onToolStarted(name, argumentsJson);
                 }
 
                 @Override

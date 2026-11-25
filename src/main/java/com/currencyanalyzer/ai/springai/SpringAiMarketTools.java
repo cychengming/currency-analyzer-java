@@ -138,7 +138,7 @@ public class SpringAiMarketTools {
 
     private String invoke(String name, Map<String, Object> arguments) {
         String argumentsJson = write(arguments);
-        ToolActivity.started(name);
+        ToolActivity.started(name, argumentsJson);
         long startedAt = System.nanoTime();
         String result = assistantTools.execute(name, argumentsJson);
         int durationMs = (int) Math.min(Integer.MAX_VALUE, (System.nanoTime() - startedAt) / 1_000_000);

@@ -196,25 +196,30 @@ Request:
 Suggested event types:
 
 - `message_started`
+- `reasoning_delta`
+- `tool_started` (`step`, `tool`, `arguments`)
+- `tool_completed` (`step`, `tool`, `status`, `duration_ms`, `summary`)
 - `text_delta`
-- `tool_started`
-- `tool_completed`
 - `message_completed`
-- `usage`
 - `error`
 
 Example events:
 
 ```text
-event: text_delta
-data: {"text":"The alert triggered because "}
+event: tool_started
+data: {"step":1,"tool":"get_my_alert_inbox","arguments":"{\"unread_only\":true}"}
 
 event: tool_completed
-data: {"tool":"get_my_alert_inbox","status":"ok"}
+data: {"step":1,"tool":"get_my_alert_inbox","status":"ok","duration_ms":42,"summary":"{\"status\":\"ok\",\"tool\":\"get_my_alert_inbox\",\"unread_count\":1}"}
+
+event: text_delta
+data: {"text":"The alert triggered because "}
 
 event: message_completed
 data: {"message_id":"...","finish_reason":"completed"}
 ```
+
+`GET /api/ai/conversations/{conversationId}/messages` also hydrates persisted `tool_calls` (`tool`, `arguments`, `summary`, `status`, `duration_ms`) from `ai_tool_invocations` onto each `AiMessage` so reopened threads display the full agent tool chain.
 
 This is a one-way streaming interaction, so SSE-style streaming over an authenticated request is sufficient. WebSockets are not required for the first release.
 
@@ -563,3 +568,4 @@ DeepSeek reasoning/flash models natively generate internal DSML tags (`<｜DSML�
 - **Audit Metadata (`P1`):** Completed assistant turns persist `AssistantPrompt.PROMPT_VERSION` (`prompt_version`) and the upstream `provider_response_id` on `ai_messages`, and `ToolResultSummarizer` writes compact non-sensitive JSON metadata (`status`, `pair`, `as_of`, `count`, `pair_count`, `rule_id`, `pearson_correlation`, etc.) into `ai_tool_invocations.result_summary`.
 - **Concurrency & FinOps Guardrails (`P2`):** `AiConversationService` enforces configurable per-user (`app.ai.max-concurrent-per-user`, default `2`) and instance-wide (`app.ai.max-concurrent-global`, default `32`) active stream caps and accounts for in-flight requests during quota checks (`ensureWithinDailyLimit`). `AiUsageService` estimates and persists `estimated_cost_usd` per request and enforces both per-user (`daily-user-cost-limit-usd`) and global (`daily-global-cost-limit-usd`) daily USD circuit breakers.
 - **Prometheus Telemetry (`P3`):** `AiMetrics` exposes `currency_analyzer_ai_active_streams`, `currency_analyzer_ai_requests_total`, `currency_analyzer_ai_turn_duration_seconds`, `currency_analyzer_ai_first_token_seconds`, `currency_analyzer_ai_tokens_total`, `currency_analyzer_ai_estimated_cost_usd_total`, `currency_analyzer_ai_tool_calls_total`, `currency_analyzer_ai_tool_duration_seconds`, `currency_analyzer_ai_dsml_recoveries_total`, and `currency_analyzer_ai_rate_limited_total` on `/actuator/prometheus` and `/metrics`.
+- **Gemini-Style Background Activity & Tool-Call Chain UI:** `ai-chat.js` and `styles.css` display an immediate live activity status header with shimmer and elapsed timer while the backend runs, render a structured vertical tool-call step timeline (`running` → `ok`/`error`, parameter pills, result summary hints, and duration) separated from model reasoning text, auto-collapse once `text_delta` answer streaming starts (respecting manual user toggles), safely render Markdown answers without `innerHTML`, and rehydrate persisted `tool_calls` on conversation reload.

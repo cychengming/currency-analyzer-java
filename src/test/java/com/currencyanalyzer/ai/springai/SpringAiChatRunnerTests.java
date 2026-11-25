@@ -226,6 +226,11 @@ class SpringAiChatRunnerTests {
                 }
 
                 @Override
+                public void onToolStarted(String name, String argumentsJson) {
+                    events.add("started:" + name + ":" + argumentsJson);
+                }
+
+                @Override
                 public void onToolFinished(String name, String argumentsJson, String result, int durationMs) {
                     events.add("finished:" + name);
                 }
@@ -233,8 +238,8 @@ class SpringAiChatRunnerTests {
             () -> false
         );
 
-        assertTrue(events.contains("started:get_live_rates"));
-        assertTrue(events.contains("started:get_settings"));
+        assertTrue(events.contains("started:get_live_rates:{}"));
+        assertTrue(events.contains("started:get_settings:{}"));
         assertTrue(events.contains("Quoted."));
     }
 

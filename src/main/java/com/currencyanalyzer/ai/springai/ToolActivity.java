@@ -9,6 +9,10 @@ public final class ToolActivity {
     public interface Listener {
         void started(String name);
 
+        default void started(String name, String argumentsJson) {
+            started(name);
+        }
+
         void finished(String name, String argumentsJson, String result, int durationMs);
     }
 
@@ -26,9 +30,13 @@ public final class ToolActivity {
     }
 
     static void started(String name) {
+        started(name, "{}");
+    }
+
+    static void started(String name, String argumentsJson) {
         Listener listener = CURRENT.get();
         if (listener != null) {
-            listener.started(name);
+            listener.started(name, argumentsJson);
         }
     }
 

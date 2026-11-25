@@ -386,7 +386,12 @@ public class AiConversationService {
 
                 @Override
                 public void onToolStarted(String name) {
-                    sendEvent(turn.active.emitter, "tool_started", Map.of("tool", name));
+                    emitToolStarted(turn, name, "{}");
+                }
+
+                @Override
+                public void onToolStarted(String name, String argumentsJson) {
+                    emitToolStarted(turn, name, argumentsJson);
                 }
 
                 @Override
@@ -483,13 +488,22 @@ public class AiConversationService {
     }
 
     private Turn executeTool(UUID conversationId, TurnState turn, ToolCall call) {
-        sendEvent(turn.active.emitter, "tool_started", Map.of("tool", call.name()));
+        emitToolStarted(turn, call.name(), call.argumentsJson());
         long startedAt = System.nanoTime();
         String result = assistantTools.execute(call.name(), call.argumentsJson());
         int durationMs = (int) Math.min(Integer.MAX_VALUE, (System.nanoTime() - startedAt) / 1_000_000);
         recordToolCompletion(turn, call.name(), call.argumentsJson(), result, durationMs);
         log.debug("Tool {} finished for conversation {} in {} ms", call.name(), conversationId, durationMs);
         return Turn.toolResult(call.id(), result);
+    }
+
+    private static void emitToolStarted(TurnState turn, String name, String argumentsJson) {
+        int step = turn.nextToolStep();
+        sendEvent(turn.active.emitter, "tool_started", Map.of(
+            "step", step,
+            "tool", name,
+            "arguments", truncate(argumentsJson, 500)
+        ));
     }
 
     private void recordToolCompletion(
@@ -510,9 +524,13 @@ public class AiConversationService {
             summaryJson
         ));
         metrics.recordToolCall(name, status, durationMs);
+        int step = turn.completeToolStep();
         sendEvent(turn.active.emitter, "tool_completed", Map.of(
+            "step", step,
             "tool", name,
-            "status", status
+            "status", status,
+            "duration_ms", durationMs,
+            "summary", summaryJson == null ? "{}" : summaryJson
         ));
     }
 
@@ -660,10 +678,21 @@ public class AiConversationService {
         private final UsageLedger usage = new UsageLedger();
         private final AtomicBoolean firstTokenRecorded = new AtomicBoolean();
         private final AtomicReference<String> providerResponseId = new AtomicReference<>();
+        private int toolStepSeq;
+        private int currentToolStep;
 
         private TurnState(ActiveResponse active, long startedAtNanos) {
             this.active = active;
             this.startedAtNanos = startedAtNanos;
+        }
+
+        private int nextToolStep() {
+            currentToolStep = ++toolStepSeq;
+            return currentToolStep;
+        }
+
+        private int completeToolStep() {
+            return currentToolStep > 0 ? currentToolStep : ++toolStepSeq;
         }
     }
 

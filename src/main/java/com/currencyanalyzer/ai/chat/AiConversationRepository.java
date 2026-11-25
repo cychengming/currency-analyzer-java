@@ -1,5 +1,8 @@
 package com.currencyanalyzer.ai.chat;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 
@@ -8,13 +11,17 @@ import java.sql.SQLException;
 import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 @Repository
 public class AiConversationRepository {
 
     private static final int MAX_CONTEXT_MESSAGES = 20;
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
     private final JdbcTemplate jdbcTemplate;
 
@@ -174,7 +181,7 @@ public class AiConversationRepository {
     }
 
     public List<AiMessage> findConversationMessages(UUID conversationId) {
-        return jdbcTemplate.query("""
+        List<AiMessage> rawMessages = jdbcTemplate.query("""
                 SELECT id, role, content, reasoning_content, created_at
                 FROM ai_messages
                 WHERE conversation_id = ?
@@ -189,6 +196,77 @@ public class AiConversationRepository {
             ),
             conversationId
         );
+        if (rawMessages.isEmpty()) {
+            return List.of();
+        }
+        Map<UUID, List<AiToolCall>> toolCallsByMessage = loadToolCallsByConversation(conversationId);
+        if (toolCallsByMessage.isEmpty()) {
+            return rawMessages;
+        }
+        List<AiMessage> enriched = new ArrayList<>(rawMessages.size());
+        for (AiMessage message : rawMessages) {
+            List<AiToolCall> toolCalls = toolCallsByMessage.getOrDefault(message.id(), List.of());
+            enriched.add(new AiMessage(
+                message.id(),
+                message.role(),
+                message.content(),
+                message.createdAt(),
+                message.reasoning(),
+                toolCalls
+            ));
+        }
+        return List.copyOf(enriched);
+    }
+
+    private Map<UUID, List<AiToolCall>> loadToolCallsByConversation(UUID conversationId) {
+        Map<UUID, List<AiToolCall>> byMessage = new LinkedHashMap<>();
+        jdbcTemplate.query("""
+                SELECT t.message_id,
+                       t.tool_name,
+                       CAST(t.arguments_json AS VARCHAR) AS arguments_json,
+                       CAST(t.result_summary AS VARCHAR) AS result_summary,
+                       t.status,
+                       t.duration_ms
+                FROM ai_tool_invocations t
+                JOIN ai_messages m ON m.id = t.message_id
+                WHERE m.conversation_id = ?
+                ORDER BY t.created_at, t.id
+                """,
+            resultSet -> {
+                UUID messageId = resultSet.getObject("message_id", UUID.class);
+                if (messageId == null) {
+                    return;
+                }
+                AiToolCall call = new AiToolCall(
+                    resultSet.getString("tool_name"),
+                    normalizeJsonColumn(resultSet.getString("arguments_json")),
+                    normalizeJsonColumn(resultSet.getString("result_summary")),
+                    resultSet.getString("status"),
+                    resultSet.getObject("duration_ms", Integer.class)
+                );
+                byMessage.computeIfAbsent(messageId, ignored -> new ArrayList<>()).add(call);
+            },
+            conversationId
+        );
+        return byMessage;
+    }
+
+    static String normalizeJsonColumn(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return null;
+        }
+        String trimmed = raw.trim();
+        if (trimmed.length() >= 2 && trimmed.startsWith("\"") && trimmed.endsWith("\"")) {
+            try {
+                JsonNode node = OBJECT_MAPPER.readTree(trimmed);
+                if (node != null && node.isTextual()) {
+                    return node.asText();
+                }
+            } catch (JsonProcessingException ignored) {
+                return trimmed;
+            }
+        }
+        return trimmed;
     }
 
     private static String titleFrom(String content) {

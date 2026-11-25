@@ -360,8 +360,16 @@ class AiConversationControllerTests {
         mockMvc.perform(asyncDispatch(pendingResponse))
             .andExpect(status().isOk())
             .andExpect(content().string(org.hamcrest.Matchers.containsString("event:tool_started")))
+            .andExpect(content().string(org.hamcrest.Matchers.containsString("event:tool_completed")))
+            .andExpect(content().string(org.hamcrest.Matchers.containsString("\"duration_ms\"")))
             .andExpect(content().string(org.hamcrest.Matchers.containsString("1.0832")))
             .andExpect(content().string(org.hamcrest.Matchers.containsString("event:message_completed")));
+
+        mockMvc.perform(get("/api/ai/conversations/{id}/messages", id).with(user("rate-user")))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$[1].tool_calls[0].tool").value("get_live_rates"))
+            .andExpect(jsonPath("$[1].tool_calls[0].status").value("ok"))
+            .andExpect(jsonPath("$[1].tool_calls[0].summary").value(org.hamcrest.Matchers.containsString("pair_count")));
 
         Integer toolCalls = jdbcTemplate.queryForObject(
             "SELECT COUNT(*) FROM ai_tool_invocations WHERE tool_name = 'get_live_rates' AND status = 'ok'",
