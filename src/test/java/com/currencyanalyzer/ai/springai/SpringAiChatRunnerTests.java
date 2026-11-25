@@ -234,6 +234,70 @@ class SpringAiChatRunnerTests {
         assertTrue(events.contains("Quoted."));
     }
 
+    @Test
+    void recoversAndExecutesLeakedDsmlToolCallsWithoutStreamingMarkup() {
+        LeakedDsmlChatModel model = new LeakedDsmlChatModel();
+        SpringAiChatRunner runner = runner(model);
+        List<String> events = new ArrayList<>();
+        StringBuilder visible = new StringBuilder();
+
+        runner.answer(
+            "Be brief.",
+            List.of(
+                new SpringAiChatRunner.PriorMessage(
+                    "assistant",
+                    "Earlier reply.\n<｜｜DSML｜｜ calls>\n<｜｜DSML｜｜ invoke name=\"get_live_rates\"></｜｜DSML｜｜ invoke>\n</｜｜DSML｜｜ calls>",
+                    null
+                ),
+                new SpringAiChatRunner.PriorMessage("user", "Check rates and settings now.", null)
+            ),
+            new SpringAiChatRunner.StreamListener() {
+                @Override
+                public void onText(String delta) {
+                    visible.append(delta);
+                }
+
+                @Override
+                public void onReasoning(String delta) {
+                }
+
+                @Override
+                public void onToolStarted(String name) {
+                    events.add("started:" + name);
+                }
+
+                @Override
+                public void onToolFinished(String name, String argumentsJson, String result, int durationMs) {
+                    events.add("finished:" + name);
+                }
+            },
+            () -> false
+        );
+
+        assertTrue(events.contains("started:get_live_rates"));
+        assertTrue(events.contains("finished:get_live_rates"));
+        assertTrue(events.contains("started:get_settings"));
+        assertTrue(events.contains("finished:get_settings"));
+        assertEquals("Live rates and settings loaded.", visible.toString());
+        assertEquals("Earlier reply.", model.firstRoundPriorAssistantText);
+        assertEquals("auto", model.firstRoundToolChoice);
+    }
+
+    @Test
+    void setsToolChoiceNoneWhenRetryingIncompleteAnswer() {
+        ReasoningOnlyThenAnswer model = new ReasoningOnlyThenAnswer();
+        SpringAiChatRunner runner = runner(model);
+
+        runner.answer(
+            "Be brief.",
+            List.of(new SpringAiChatRunner.PriorMessage("user", "Explain risk.", null)),
+            quiet(),
+            () -> false
+        );
+
+        assertEquals(List.of("auto", "none"), model.toolChoices);
+    }
+
     private static SpringAiChatRunner runner(ChatModel model) {
         return new SpringAiChatRunner(provider(model), marketTools(), "deepseek-flash", 200);
     }
@@ -367,6 +431,7 @@ class SpringAiChatRunnerTests {
 
     private static final class ReasoningOnlyThenAnswer implements ChatModel {
         private final List<DeepSeekApi.ChatCompletionRequest.Thinking.Type> thinking = new ArrayList<>();
+        private final List<Object> toolChoices = new ArrayList<>();
         private String nudge;
         private int calls;
 
@@ -380,6 +445,7 @@ class SpringAiChatRunnerTests {
             calls++;
             DeepSeekChatOptions options = (DeepSeekChatOptions) prompt.getOptions();
             thinking.add(options.getThinking().type());
+            toolChoices.add(options.getToolChoice());
             if (calls == 1) {
                 DeepSeekAssistantMessage message = DeepSeekAssistantMessage.builder()
                     .content("")
@@ -516,6 +582,42 @@ class SpringAiChatRunnerTests {
         }
 
         private static ChatResponse chunkAnswer(String text) {
+            DeepSeekAssistantMessage message = DeepSeekAssistantMessage.builder().content(text).build();
+            return new ChatResponse(List.of(new Generation(message)));
+        }
+    }
+
+    private static final class LeakedDsmlChatModel implements ChatModel {
+        private int calls;
+        private String firstRoundPriorAssistantText;
+        private Object firstRoundToolChoice;
+
+        @Override
+        public ChatResponse call(Prompt prompt) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public Flux<ChatResponse> stream(Prompt prompt) {
+            calls++;
+            if (calls == 1) {
+                firstRoundPriorAssistantText = prompt.getInstructions().get(1).getText();
+                firstRoundToolChoice = ((DeepSeekChatOptions) prompt.getOptions()).getToolChoice();
+                return Flux.just(
+                    textChunk("<｜"),
+                    textChunk("｜DSML｜｜ calls>\n<｜｜DSML｜｜ invoke name=\"get_live_rates\">\n</｜｜DSML｜｜ invoke>\n"),
+                    textChunk("<｜｜DSML｜｜ invoke name=\"get_settings\"></｜｜DSML｜｜ invoke>\n</｜｜DSML｜｜ calls>")
+                );
+            }
+            return Flux.just(textChunk("Live rates and settings loaded."));
+        }
+
+        @Override
+        public ChatOptions getDefaultOptions() {
+            return DeepSeekChatOptions.builder().model("deepseek-flash").build();
+        }
+
+        private static ChatResponse textChunk(String text) {
             DeepSeekAssistantMessage message = DeepSeekAssistantMessage.builder().content(text).build();
             return new ChatResponse(List.of(new Generation(message)));
         }

@@ -2,12 +2,21 @@ package com.currencyanalyzer.ai.tools;
 
 import com.currencyanalyzer.ai.knowledge.KnowledgeNote;
 import com.currencyanalyzer.ai.knowledge.KnowledgeRetriever;
+import com.currencyanalyzer.alerts.UserAlertRuleRepository;
+import com.currencyanalyzer.alerts.UserAlertRuleService;
+import com.currencyanalyzer.alerts.UserAlertRuleService.ProfileRequest;
+import com.currencyanalyzer.auth.UserRepository;
 import com.currencyanalyzer.marketdata.HistoricalPoint;
 import com.currencyanalyzer.marketdata.LiveRate;
 import com.currencyanalyzer.marketdata.MarketDataService;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
+import org.springframework.jdbc.datasource.SingleConnectionDataSource;
 import org.springframework.web.client.RestClientException;
 
 import java.time.Clock;
@@ -352,5 +361,113 @@ class AssistantToolsTests {
             )
             """);
         return jdbc;
+    }
+
+    @Test
+    void managesUserScopedAlerts2RulesAndEnforcesAuthenticationIsolation() throws Exception {
+        SingleConnectionDataSource dataSource = new SingleConnectionDataSource(
+            "jdbc:h2:mem:assistant_alerts_" + System.nanoTime() + ";MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;NON_KEYWORDS=KEY,VALUE;DB_CLOSE_DELAY=-1",
+            "sa",
+            "",
+            true
+        );
+        try {
+            Flyway.configure().dataSource(dataSource).locations("classpath:db/migration").load().migrate();
+
+            Clock fixedClock = Clock.fixed(Instant.parse("2026-11-25T08:00:00Z"), ZoneOffset.UTC);
+            JdbcClient jdbcClient = JdbcClient.create(dataSource);
+            UserRepository userRepository = new UserRepository(jdbcClient, fixedClock);
+            var alice = userRepository.create("alice", "hash-a");
+            var bob = userRepository.create("bob", "hash-b");
+
+            MarketDataService marketDataService = mock(MarketDataService.class);
+            when(marketDataService.fetchLiveRates()).thenReturn(Map.of(
+                "EUR/USD", new LiveRate(1.10, 0.01, 0.91),
+                "GOLD/USD", new LiveRate(2650.0, 12.0, 0.45)
+            ));
+            UserAlertRuleRepository ruleRepository = new UserAlertRuleRepository(jdbcClient);
+            UserAlertRuleService ruleService = new UserAlertRuleService(ruleRepository, marketDataService, fixedClock);
+            ruleService.updateProfile(alice.id(), new ProfileRequest("alice@example.com", List.of("EUR/USD")));
+            ruleRepository.insertUserAlert(
+                alice.id(), null, "EUR breakout", "EUR/USD", 1.2, 1.09, 1.103,
+                Instant.parse("2026-11-25T07:30:00Z"), "cross_above", 1.103, 1.10
+            );
+
+            AssistantTools tools = new AssistantTools(
+                marketDataService,
+                new JdbcTemplate(dataSource),
+                fixedClock,
+                60,
+                null,
+                ruleService,
+                userRepository
+            );
+            ObjectMapper mapper = new ObjectMapper();
+
+            ToolUserContext.clear();
+            assertTrue(tools.execute(AssistantTools.LIST_MY_ALERT_RULES, "{}").contains("Authentication is required"));
+
+            ToolUserContext.bind("alice");
+            String createdJson = tools.execute(
+                AssistantTools.CREATE_ALERT_RULE,
+                "{\"pair\":\"EUR/USD\",\"condition_type\":\"cross_above\",\"target_value\":1.12,\"nickname\":\"EUR breakout\",\"frequency\":\"RECURRING\",\"notify_email\":true}"
+            );
+            JsonNode createdNode = mapper.readTree(createdJson);
+            assertTrue(createdNode.path("created").asBoolean(), () -> "Unexpected create response: " + createdJson);
+            String ruleId = createdNode.path("rule").path("id").asText();
+            assertFalse(ruleId.isBlank());
+
+            String listedJson = tools.execute(AssistantTools.LIST_MY_ALERT_RULES, "{\"pair\":\"EUR/USD\",\"status\":\"ARMED\"}");
+            assertTrue(listedJson.contains("\"count\":1"));
+            assertTrue(listedJson.contains("EUR breakout"));
+            assertTrue(listedJson.contains("alice@example.com"));
+
+            String inboxJson = tools.execute(AssistantTools.GET_MY_ALERT_INBOX, "{\"unread_only\":true,\"limit\":5}");
+            assertTrue(inboxJson.contains("\"unread_count\":1"));
+            assertTrue(inboxJson.contains("EUR/USD"));
+
+            String pausedJson = tools.execute(
+                AssistantTools.UPDATE_ALERT_RULE_STATUS,
+                "{\"rule_id\":\"" + ruleId + "\",\"status\":\"PAUSED\"}"
+            );
+            assertTrue(pausedJson.contains("\"updated\":true"));
+            assertTrue(pausedJson.contains("\"status\":\"PAUSED\""));
+
+            assertTrue(tools.execute(AssistantTools.UPDATE_ALERT_RULE_STATUS, "{\"rule_id\":\"not-a-uuid\",\"status\":\"ARMED\"}")
+                .contains("Invalid rule_id UUID"));
+            assertTrue(tools.execute(AssistantTools.UPDATE_ALERT_RULE_STATUS, "{\"rule_id\":\"" + ruleId + "\"}")
+                .contains("status is required"));
+            assertTrue(tools.execute(AssistantTools.LIST_MY_ALERT_RULES, "{\"status\":\"INVALID\"}")
+                .contains("status must be ARMED, TRIGGERED, or PAUSED"));
+            assertTrue(tools.execute(AssistantTools.GET_MY_ALERT_INBOX, "{\"limit\":50}")
+                .contains("limit must be between 1 and 20"));
+            assertTrue(tools.execute(
+                AssistantTools.CREATE_ALERT_RULE,
+                "{\"pair\":\"GOLD/USD\",\"condition_type\":\"pct_move\",\"target_value\":\"2.5\",\"window_days\":\"14\",\"notify_email\":\"false\"}"
+            ).contains("\"created\":true"));
+            assertTrue(tools.execute(
+                AssistantTools.CREATE_ALERT_RULE,
+                "{\"pair\":\"GOLD/USD\",\"condition_type\":\"cross_above\",\"target_value\":\"bad\"}"
+            ).contains("target_value must be a number"));
+            assertTrue(tools.execute(
+                AssistantTools.CREATE_ALERT_RULE,
+                "{\"pair\":\"GOLD/USD\",\"condition_type\":\"pct_move\",\"target_value\":2.0,\"window_days\":\"bad\"}"
+            ).contains("window_days must be an integer"));
+
+            ToolUserContext.bind(" ");
+            assertTrue(tools.execute(AssistantTools.LIST_MY_ALERT_RULES, "{}").contains("Authentication is required"));
+            ToolUserContext.bind(null);
+            assertTrue(tools.execute(AssistantTools.GET_MY_ALERT_INBOX, "{}").contains("Authentication is required"));
+
+            ToolUserContext.bind(bob.username());
+            assertTrue(tools.execute(AssistantTools.LIST_MY_ALERT_RULES, "{}").contains("\"count\":0"));
+            assertTrue(tools.execute(
+                AssistantTools.UPDATE_ALERT_RULE_STATUS,
+                "{\"rule_id\":\"" + ruleId + "\",\"status\":\"ARMED\"}"
+            ).contains("Alert rule not found"));
+        } finally {
+            ToolUserContext.clear();
+            dataSource.destroy();
+        }
     }
 }

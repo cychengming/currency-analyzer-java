@@ -83,6 +83,58 @@ public class SpringAiMarketTools {
         return invoke(AssistantTools.SEARCH_NOTES, Map.of("query", query));
     }
 
+    @Tool(name = AssistantTools.LIST_MY_ALERT_RULES, description = AssistantTools.LIST_MY_ALERT_RULES_DESCRIPTION)
+    public String listMyAlertRules(
+        @ToolParam(description = "Optional pair filter, such as EUR/USD", required = false) String pair,
+        @ToolParam(description = "Optional status filter: ARMED, TRIGGERED, or PAUSED", required = false) String status
+    ) {
+        return invoke(AssistantTools.LIST_MY_ALERT_RULES, optional("pair", pair, "status", status));
+    }
+
+    @Tool(name = AssistantTools.GET_MY_ALERT_INBOX, description = AssistantTools.GET_MY_ALERT_INBOX_DESCRIPTION)
+    public String getMyAlertInbox(
+        @ToolParam(description = "Optional pair filter, such as EUR/USD", required = false) String pair,
+        @ToolParam(description = "When true, return only unread alerts", required = false) Boolean unreadOnly,
+        @ToolParam(description = "Maximum alerts to return, from 1 to 20", required = false) Integer limit
+    ) {
+        return invoke(
+            AssistantTools.GET_MY_ALERT_INBOX,
+            optional("pair", pair, "unread_only", unreadOnly, "limit", limit)
+        );
+    }
+
+    @Tool(name = AssistantTools.CREATE_ALERT_RULE, description = AssistantTools.CREATE_ALERT_RULE_DESCRIPTION)
+    public String createAlertRule(
+        @ToolParam(description = "Pair such as EUR/USD or GOLD/USD") String pair,
+        @ToolParam(description = "One of: cross_above, cross_below, pct_move, ma_crossover") String conditionType,
+        @ToolParam(description = "Target price for cross_above/cross_below, or % move for pct_move", required = false) Double targetValue,
+        @ToolParam(description = "Optional short label for the alert rule", required = false) String nickname,
+        @ToolParam(description = "Lookback window in days for pct_move (1 to 365)", required = false) Integer windowDays,
+        @ToolParam(description = "ONCE (default) or RECURRING", required = false) String frequency,
+        @ToolParam(description = "Whether to send email when triggered (default true)", required = false) Boolean notifyEmail
+    ) {
+        return invoke(
+            AssistantTools.CREATE_ALERT_RULE,
+            optional(
+                "pair", pair,
+                "condition_type", conditionType,
+                "target_value", targetValue,
+                "nickname", nickname,
+                "window_days", windowDays,
+                "frequency", frequency,
+                "notify_email", notifyEmail
+            )
+        );
+    }
+
+    @Tool(name = AssistantTools.UPDATE_ALERT_RULE_STATUS, description = AssistantTools.UPDATE_ALERT_RULE_STATUS_DESCRIPTION)
+    public String updateAlertRuleStatus(
+        @ToolParam(description = "UUID of the user's alert rule") String ruleId,
+        @ToolParam(description = "New status: ARMED or PAUSED") String status
+    ) {
+        return invoke(AssistantTools.UPDATE_ALERT_RULE_STATUS, optional("rule_id", ruleId, "status", status));
+    }
+
     private String invoke(String name, Map<String, Object> arguments) {
         String argumentsJson = write(arguments);
         ToolActivity.started(name);
