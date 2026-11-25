@@ -25,6 +25,7 @@ import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -134,95 +135,14 @@ class AssistantToolsTests {
     }
 
     @Test
-    void readsStoredAlertsRulesMonitoringAndSettings() {
+    void readsSettingsSearchesNotesAndRejectsRetiredLegacyTools() {
         JdbcTemplate jdbc = database();
-        jdbc.update("""
-            INSERT INTO alerts
-                (pair, percent_change, old_rate, new_rate, timestamp, email_sent,
-                 alert_type, trigger_value, threshold_value)
-            VALUES ('EUR/USD', 1.5, 1.0, 1.1, TIMESTAMP WITH TIME ZONE '2026-11-21 10:00:00+00',
-                    TRUE, 'percent', 1.1, 1.0)
-            """);
-        jdbc.update("""
-            INSERT INTO alerts
-                (pair, percent_change, old_rate, new_rate, timestamp, email_sent,
-                 alert_type, trigger_value, threshold_value)
-            VALUES ('GBP/USD', NULL, NULL, NULL, NULL, FALSE, 'price', NULL, NULL)
-            """);
-        jdbc.update("""
-            INSERT INTO alert_preferences
-                (pair, enabled, alert_type, custom_threshold, custom_period, enable_trend_consistency,
-                 lookback_years, price_high, price_low, trigger_type, volatility_type,
-                 ma_short_period, ma_long_period, signal_type)
-            VALUES ('EUR/USD', TRUE, 'percent', 1.5, 5, TRUE, 3, 1.2, 1.0, 'close', 'atr', 5, 20, 'cross')
-            """);
-        jdbc.update("""
-            INSERT INTO monitoring_state (pair, last_alert_time)
-            VALUES ('EUR/USD', TIMESTAMP WITH TIME ZONE '2026-11-21 09:00:00+00'),
-                   ('GBP/USD', NULL)
-            """);
         jdbc.update("INSERT INTO settings (key, value) VALUES ('a_password', 'hidden')");
         jdbc.update("INSERT INTO settings (key, value) VALUES ('b_blank', NULL)");
         String longValue = "x".repeat(300);
         for (int index = 0; index < 41; index++) {
             jdbc.update("INSERT INTO settings (key, value) VALUES (?, ?)", "k" + index, longValue);
         }
-        AssistantTools tools = tools(mock(MarketDataService.class), jdbc, null);
-
-        String alerts = tools.execute("get_alert_history", "{\"pair\":\"EUR/USD\",\"limit\":5}");
-        String rules = tools.execute("get_alert_preferences", "{\"pair\":\"EUR/USD\"}");
-        String monitoring = tools.execute("get_monitoring_state", "{}");
-        String settings = tools.execute("get_settings", " ");
-
-        assertTrue(alerts.contains("EUR/USD"));
-        assertTrue(alerts.contains("2026-11-21"));
-        assertTrue(rules.contains("\"signal_type\":\"cross\""));
-        assertTrue(monitoring.contains("GBP/USD"));
-        assertTrue(settings.contains("secrets_omitted"));
-        assertTrue(settings.contains("[truncated]"));
-        assertFalse(settings.contains("hidden"));
-    }
-
-    @Test
-    void readsAStoredForecastAndSearchesNotes() {
-        JdbcTemplate jdbc = database();
-        jdbc.update("""
-            INSERT INTO dl_forecast_runs
-                (created_at, model_type, lookback_days, horizon_days, asset, notes)
-            VALUES ('2026-11-21T00:00:00Z', 'lstm', 30, 5, 'EUR/USD', 'saved')
-            """);
-        Long eurRun = jdbc.queryForObject(
-            "SELECT id FROM dl_forecast_runs WHERE asset = 'EUR/USD'",
-            Long.class
-        );
-        for (int index = 0; index < 45; index++) {
-            jdbc.update(
-                "INSERT INTO asset_forecast_daily (run_id, dt, predicted_close) VALUES (?, ?, ?)",
-                eurRun,
-                "2026-12-" + (index + 1),
-                1.1 + index
-            );
-        }
-        jdbc.update("""
-            INSERT INTO dl_forecast_runs
-                (created_at, model_type, lookback_days, horizon_days, asset, notes)
-            VALUES ('2026-11-20T00:00:00Z', 'lstm', 30, 5, 'GOLD/USD', 'gold')
-            """);
-        Long goldRun = jdbc.queryForObject(
-            "SELECT id FROM dl_forecast_runs WHERE asset = 'GOLD/USD'",
-            Long.class
-        );
-        jdbc.update(
-            "INSERT INTO gold_forecast_daily (run_id, dt, predicted_close) VALUES (?, ?, ?)",
-            goldRun,
-            "2026-12-01",
-            2400
-        );
-        jdbc.update("""
-            INSERT INTO dl_forecast_runs
-                (created_at, model_type, lookback_days, horizon_days, asset, notes)
-            VALUES ('2026-11-19T00:00:00Z', 'lstm', 30, 5, 'USD/JPY', 'empty')
-            """);
         KnowledgeRetriever retriever = mock(KnowledgeRetriever.class);
         when(retriever.retrieve(anyString(), eq(4))).thenReturn(List.of());
         when(retriever.retrieve(eq("position sizing"), eq(4))).thenReturn(List.of(
@@ -230,20 +150,86 @@ class AssistantToolsTests {
         ));
         AssistantTools tools = tools(mock(MarketDataService.class), jdbc, retriever);
 
-        String forecast = tools.execute("get_latest_forecast", "{\"asset\":\"EUR/USD\"}");
-        String gold = tools.execute("get_latest_forecast", "{\"asset\":\"GOLD/USD\"}");
-        String emptyRun = tools.execute("get_latest_forecast", "{\"asset\":\"USD/JPY\"}");
-        String missing = tools.execute("get_latest_forecast", "{\"asset\":\"AUD/USD\"}");
+        assertTrue(tools.execute("get_alert_history", "{}").contains("Unknown tool"));
+        assertTrue(tools.execute("get_alert_preferences", "{}").contains("Unknown tool"));
+        assertTrue(tools.execute("get_monitoring_state", "{}").contains("Unknown tool"));
+        assertTrue(tools.execute("get_latest_forecast", "{}").contains("Unknown tool"));
+
+        String settings = tools.execute("get_settings", " ");
         String notes = tools.execute("search_notes", "{\"query\":\"position sizing\"}");
         String noNotes = tools.execute("search_notes", "{\"query\":\"nothing\"}");
 
-        assertTrue(forecast.contains("\"available\":true"));
-        assertTrue(forecast.contains("predicted_close"));
-        assertTrue(gold.contains("2400"));
-        assertTrue(emptyRun.contains("no stored points"));
-        assertTrue(missing.contains("No forecast has been stored"));
+        assertTrue(settings.contains("secrets_omitted"));
+        assertTrue(settings.contains("[truncated]"));
+        assertFalse(settings.contains("hidden"));
         assertTrue(notes.contains("Position sizing"));
         assertTrue(noNotes.contains("No matching note"));
+    }
+
+    @Test
+    void computesTechnicalsEnrichedComparisonAndPositionSizing() {
+        MarketDataService marketDataService = mock(MarketDataService.class);
+        List<HistoricalPoint> eur = new java.util.ArrayList<>();
+        List<HistoricalPoint> gbp = new java.util.ArrayList<>();
+        java.time.LocalDate start = java.time.LocalDate.of(2026, 8, 1);
+        for (int i = 0; i < 60; i++) {
+            String dt = start.plusDays(i).toString();
+            eur.add(new HistoricalPoint(dt, 1.05 + i * 0.002 + (i % 2 == 0 ? 0.001 : 0.0)));
+            gbp.add(new HistoricalPoint(dt, 1.25 + i * 0.003 + (i % 2 == 0 ? 0.0015 : 0.0)));
+        }
+        when(marketDataService.fetchHistorical(eq("EUR/USD"), eq(90))).thenReturn(eur);
+        when(marketDataService.fetchHistorical(eq("EUR/USD"), eq(60))).thenReturn(eur);
+        when(marketDataService.fetchHistorical(eq("GBP/USD"), eq(60))).thenReturn(gbp);
+        when(marketDataService.fetchLiveRates()).thenReturn(Map.of(
+            "EUR/USD", new LiveRate(1.10, 0.01, 0.91)
+        ));
+        JdbcTemplate jdbc = database();
+        jdbc.update("INSERT INTO settings (key, value) VALUES ('daily_risk_limit_pct', '2.5')");
+
+        AssistantTools tools = tools(marketDataService, jdbc, null);
+        assertEquals(11, tools.definitions().size());
+
+        String technicals = tools.execute(AssistantTools.ANALYZE_PAIR_TECHNICALS, "{\"pair\":\"EUR/USD\"}");
+        assertTrue(technicals.contains("\"available\":true"));
+        assertTrue(technicals.contains("\"rsi_14\""));
+        assertTrue(technicals.contains("\"sma_20\""));
+        assertTrue(technicals.contains("\"macd_12_26_9\""));
+        assertTrue(technicals.contains("\"bollinger_bands_20\""));
+
+        assertTrue(tools.execute(AssistantTools.ANALYZE_PAIR_TECHNICALS, "{\"pair\":\"EUR/USD\",\"days\":5}")
+            .contains("days must be between 14 and 365"));
+
+        String compared = tools.execute(
+            AssistantTools.COMPARE_PAIRS,
+            "{\"first\":\"EUR/USD\",\"second\":\"GBP/USD\",\"days\":60}"
+        );
+        assertTrue(compared.contains("\"pearson_correlation\""));
+        assertTrue(compared.contains("\"relative_change_pct\""));
+
+        String sizingLive = tools.execute(
+            AssistantTools.CALCULATE_POSITION_SIZE,
+            "{\"pair\":\"EUR/USD\",\"account_equity\":10000,\"risk_pct\":1.5,\"stop_loss_price\":1.08,\"take_profit_price\":1.14}"
+        );
+        assertTrue(sizingLive.contains("\"entry_source\":\"live_spot\""));
+        assertTrue(sizingLive.contains("\"exceeds_daily_risk_limit\":false"));
+        assertTrue(sizingLive.contains("\"reward_to_risk_ratio\":2.0"));
+
+        String sizingExplicit = tools.execute(
+            AssistantTools.CALCULATE_POSITION_SIZE,
+            "{\"pair\":\"GOLD/USD\",\"account_equity\":10000,\"risk_pct\":3.5,\"entry_price\":2600,\"stop_loss_price\":2650}"
+        );
+        assertTrue(sizingExplicit.contains("\"entry_source\":\"user_specified\""));
+        assertTrue(sizingExplicit.contains("\"direction\":\"short\""));
+        assertTrue(sizingExplicit.contains("\"exceeds_daily_risk_limit\":true"));
+
+        assertTrue(tools.execute(
+            AssistantTools.CALCULATE_POSITION_SIZE,
+            "{\"pair\":\"GOLD/USD\",\"account_equity\":10000,\"risk_pct\":1.0,\"stop_loss_price\":2500}"
+        ).contains("live rate is unavailable"));
+        assertTrue(tools.execute(
+            AssistantTools.CALCULATE_POSITION_SIZE,
+            "{\"pair\":\"EUR/USD\",\"risk_pct\":1.0,\"stop_loss_price\":1.08}"
+        ).contains("account_equity is required"));
     }
 
     @Test
@@ -259,8 +245,8 @@ class AssistantToolsTests {
         doThrow(new IllegalStateException("boom")).when(marketDataService).fetchLiveRates();
         assertTrue(tools.execute("get_live_rates", "{}").contains("could not be completed"));
         JdbcTemplate broken = database();
-        broken.execute("DROP TABLE alerts");
-        assertTrue(tools(marketDataService, broken, null).execute("get_alert_history", "{}")
+        broken.execute("DROP TABLE settings");
+        assertTrue(tools(marketDataService, broken, null).execute("get_settings", "{}")
             .contains("could not be read"));
         assertTrue(tools.execute("get_historical_series", "[").contains("not valid JSON"));
         assertTrue(tools.execute("get_historical_series", "[]").contains("JSON object"));
@@ -268,7 +254,6 @@ class AssistantToolsTests {
             .contains("Invalid pair"));
         assertTrue(tools.execute("compare_pairs", "{\"first\":\"EUR/USD\",\"second\":\"EUR/USD\",\"days\":3}")
             .contains("two different pairs"));
-        assertTrue(tools.execute("get_alert_history", "{\"limit\":0}").contains("limit must be between"));
         assertTrue(withNotes.execute("search_notes", "{\"query\":\" \"}").contains("query is required"));
         assertTrue(withNotes.execute("search_notes", "{\"query\":\"" + "q".repeat(600) + "\"}")
             .contains("No matching note"));

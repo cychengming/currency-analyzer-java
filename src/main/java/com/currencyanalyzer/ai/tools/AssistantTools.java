@@ -26,7 +26,6 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClientException;
 
 import java.time.Clock;
-import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -44,11 +43,9 @@ public class AssistantTools {
     public static final String GET_LIVE_RATES = "get_live_rates";
     public static final String GET_HISTORICAL_SERIES = "get_historical_series";
     public static final String COMPARE_PAIRS = "compare_pairs";
-    public static final String GET_ALERT_HISTORY = "get_alert_history";
-    public static final String GET_ALERT_PREFERENCES = "get_alert_preferences";
-    public static final String GET_MONITORING_STATE = "get_monitoring_state";
+    public static final String ANALYZE_PAIR_TECHNICALS = "analyze_pair_technicals";
+    public static final String CALCULATE_POSITION_SIZE = "calculate_position_size";
     public static final String GET_SETTINGS = "get_settings";
-    public static final String GET_LATEST_FORECAST = "get_latest_forecast";
     public static final String SEARCH_NOTES = "search_notes";
     public static final String LIST_MY_ALERT_RULES = "list_my_alert_rules";
     public static final String GET_MY_ALERT_INBOX = "get_my_alert_inbox";
@@ -60,17 +57,13 @@ public class AssistantTools {
     public static final String GET_HISTORICAL_SERIES_DESCRIPTION =
         "Read daily closes for one pair. Days must be from 1 to 365. The result includes the change over that window and a sampled series.";
     public static final String COMPARE_PAIRS_DESCRIPTION =
-        "Compare the change over the same daily window for two pairs. Days must be from 1 to 365.";
-    public static final String GET_ALERT_HISTORY_DESCRIPTION =
-        "Read alerts this application has already recorded. Omit pair to read the latest alerts across pairs.";
-    public static final String GET_ALERT_PREFERENCES_DESCRIPTION =
-        "Read legacy pair alert preferences. For the signed-in user's personal Alerts 2.0 rules, prefer list_my_alert_rules.";
-    public static final String GET_MONITORING_STATE_DESCRIPTION =
-        "Read the last time each pair raised an alert. Omit pair to list every monitored pair.";
+        "Compare two pairs over the same daily window (1 to 365 days), including relative return, Pearson return correlation, beta, and annualized volatility.";
+    public static final String ANALYZE_PAIR_TECHNICALS_DESCRIPTION =
+        "Compute deterministic technical indicators for one pair using ta4j and Hipparchus: SMA-20/50, EMA-12/26, RSI-14, MACD, Bollinger Bands, period high/low, max drawdown, and annualized volatility. Days defaults to 90 (range 14 to 365).";
+    public static final String CALCULATE_POSITION_SIZE_DESCRIPTION =
+        "Calculate deterministic educational position sizing (risk amount, stop distance %, units, notional exposure, implied leverage, optional R:R ratio, and daily_risk_limit_pct check). Omit entry_price to use the live spot rate.";
     public static final String GET_SETTINGS_DESCRIPTION =
         "Read stored application settings. Passwords, tokens, and API keys are omitted.";
-    public static final String GET_LATEST_FORECAST_DESCRIPTION =
-        "Read the newest stored model forecast. This is a saved path, not a live price and not a promise of a future price.";
     public static final String SEARCH_NOTES_DESCRIPTION =
         "Search the investment notes by meaning. Use this for a method, a risk rule, or an investor.";
     public static final String LIST_MY_ALERT_RULES_DESCRIPTION =
@@ -83,9 +76,11 @@ public class AssistantTools {
         "Pause, resume, or re-arm one of the signed-in user's existing personal alert rules by rule_id. status must be ARMED or PAUSED. Call only when the user explicitly asks to change a rule.";
 
     static final int MAX_HISTORY_DAYS = 365;
+    static final int MIN_TECHNICAL_DAYS = 14;
+    static final int DEFAULT_TECHNICAL_DAYS = 90;
     static final int MAX_SERIES_POINTS = 40;
+    static final int MAX_COMPARE_SERIES_POINTS = 15;
     static final int MAX_ALERTS = 20;
-    static final int MAX_FORECAST_POINTS = 40;
     private static final int MAX_RESULT_CHARS = 6000;
     private static final int MAX_SETTINGS = 40;
     private static final Set<String> VALID_RULE_STATUSES = Set.of("ARMED", "TRIGGERED", "PAUSED");
@@ -140,20 +135,12 @@ public class AssistantTools {
                 "second", stringProp("Second pair, such as GBP/USD"),
                 "days", integerProp("Number of recent daily closes", 1, MAX_HISTORY_DAYS)
             ), List.of("first", "second", "days"))),
-            new ToolDefinition(GET_ALERT_HISTORY, GET_ALERT_HISTORY_DESCRIPTION, schema(Map.of(
-                "pair", stringProp("Optional pair filter, such as EUR/USD"),
-                "limit", integerProp("Maximum alerts to return", 1, MAX_ALERTS)
-            ), List.of())),
-            new ToolDefinition(GET_ALERT_PREFERENCES, GET_ALERT_PREFERENCES_DESCRIPTION, schema(Map.of(
-                "pair", stringProp("Optional pair filter, such as EUR/USD")
-            ), List.of())),
-            new ToolDefinition(GET_MONITORING_STATE, GET_MONITORING_STATE_DESCRIPTION, schema(Map.of(
-                "pair", stringProp("Optional pair filter, such as EUR/USD")
-            ), List.of())),
+            new ToolDefinition(ANALYZE_PAIR_TECHNICALS, ANALYZE_PAIR_TECHNICALS_DESCRIPTION, schema(Map.of(
+                "pair", stringProp("Pair such as EUR/USD or GOLD/USD"),
+                "days", integerProp("Lookback days (default 90)", MIN_TECHNICAL_DAYS, MAX_HISTORY_DAYS)
+            ), List.of("pair"))),
+            new ToolDefinition(CALCULATE_POSITION_SIZE, CALCULATE_POSITION_SIZE_DESCRIPTION, positionSizeSchema()),
             new ToolDefinition(GET_SETTINGS, GET_SETTINGS_DESCRIPTION, schema(Map.of(), List.of())),
-            new ToolDefinition(GET_LATEST_FORECAST, GET_LATEST_FORECAST_DESCRIPTION, schema(Map.of(
-                "asset", stringProp("Optional asset, such as EUR/USD or GOLD/USD. Omit it to read the newest run.")
-            ), List.of())),
             new ToolDefinition(SEARCH_NOTES, SEARCH_NOTES_DESCRIPTION, schema(Map.of(
                 "query", stringProp("What the note should be about, in the user's own words")
             ), List.of("query"))),
@@ -181,11 +168,9 @@ public class AssistantTools {
                 case GET_LIVE_RATES -> liveRates();
                 case GET_HISTORICAL_SERIES -> historicalSeries(arguments);
                 case COMPARE_PAIRS -> comparePairs(arguments);
-                case GET_ALERT_HISTORY -> alertHistory(arguments);
-                case GET_ALERT_PREFERENCES -> alertPreferences(arguments);
-                case GET_MONITORING_STATE -> monitoringState(arguments);
+                case ANALYZE_PAIR_TECHNICALS -> analyzePairTechnicals(arguments);
+                case CALCULATE_POSITION_SIZE -> calculatePositionSize(arguments);
                 case GET_SETTINGS -> settings();
-                case GET_LATEST_FORECAST -> latestForecast(arguments);
                 case SEARCH_NOTES -> searchNotes(arguments);
                 case LIST_MY_ALERT_RULES -> listMyAlertRules(arguments);
                 case GET_MY_ALERT_INBOX -> myAlertInbox(arguments);
@@ -217,7 +202,10 @@ public class AssistantTools {
     }
 
     private String historicalSeries(JsonNode arguments) {
-        return write(historicalBody(requiredPair(arguments), arguments.path("days").asInt(0)));
+        String pair = requiredPair(arguments);
+        int days = validateHistoryDays(arguments.path("days").asInt(0));
+        List<HistoricalPoint> points = marketDataService.fetchHistorical(pair, days);
+        return write(historicalBody(pair, days, points, MAX_SERIES_POINTS));
     }
 
     private String comparePairs(JsonNode arguments) {
@@ -226,20 +214,101 @@ public class AssistantTools {
         if (first.equals(second)) {
             throw new IllegalArgumentException("Compare two different pairs");
         }
-        int days = arguments.path("days").asInt(0);
+        int days = validateHistoryDays(arguments.path("days").asInt(0));
+        List<HistoricalPoint> firstPoints = marketDataService.fetchHistorical(first, days);
+        List<HistoricalPoint> secondPoints = marketDataService.fetchHistorical(second, days);
+        Map<String, Object> firstBody = historicalBody(first, days, firstPoints, MAX_COMPARE_SERIES_POINTS);
+        Map<String, Object> secondBody = historicalBody(second, days, secondPoints, MAX_COMPARE_SERIES_POINTS);
+        Map<String, Object> comparison = MarketQuantAnalytics.comparePairStatistics(firstPoints, secondPoints);
+        if (Boolean.TRUE.equals(firstBody.get("available")) && Boolean.TRUE.equals(secondBody.get("available"))) {
+            double firstPct = ((Number) firstBody.get("change_percent")).doubleValue();
+            double secondPct = ((Number) secondBody.get("change_percent")).doubleValue();
+            comparison.put("relative_change_pct", Math.round((firstPct - secondPct) * 100.0) / 100.0);
+        }
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("days", days);
-        body.put("first", historicalBody(first, days));
-        body.put("second", historicalBody(second, days));
+        body.put("first", firstBody);
+        body.put("second", secondBody);
+        body.put("comparison", comparison);
         return write(body);
     }
 
-    private Map<String, Object> historicalBody(String pair, int days) {
+    private String analyzePairTechnicals(JsonNode arguments) {
+        String pair = requiredPair(arguments);
+        Integer rawDays = optionalInt(arguments, "days");
+        int days = rawDays == null ? DEFAULT_TECHNICAL_DAYS : rawDays;
+        if (days < MIN_TECHNICAL_DAYS || days > MAX_HISTORY_DAYS) {
+            throw new IllegalArgumentException("days must be between " + MIN_TECHNICAL_DAYS + " and " + MAX_HISTORY_DAYS);
+        }
+        List<HistoricalPoint> points = marketDataService.fetchHistorical(pair, days);
+        return write(MarketQuantAnalytics.analyzeTechnicals(pair, points, days));
+    }
+
+    private String calculatePositionSize(JsonNode arguments) {
+        String pair = requiredPair(arguments);
+        Double accountEquity = optionalDouble(arguments, "account_equity");
+        Double riskPct = optionalDouble(arguments, "risk_pct");
+        Double stopLossPrice = optionalDouble(arguments, "stop_loss_price");
+        if (accountEquity == null) {
+            throw new IllegalArgumentException("account_equity is required");
+        }
+        if (riskPct == null) {
+            throw new IllegalArgumentException("risk_pct is required");
+        }
+        if (stopLossPrice == null) {
+            throw new IllegalArgumentException("stop_loss_price is required");
+        }
+        Double entryPrice = optionalDouble(arguments, "entry_price");
+        boolean usedLiveSpot = false;
+        if (entryPrice == null) {
+            LiveRate live = marketDataService.fetchLiveRates().get(pair);
+            if (live == null || live.rate() <= 0) {
+                throw new IllegalArgumentException("entry_price is required because live rate is unavailable for " + pair);
+            }
+            entryPrice = live.rate();
+            usedLiveSpot = true;
+        }
+        Double takeProfitPrice = optionalDouble(arguments, "take_profit_price");
+        Double dailyRiskLimitPct = readDailyRiskLimitPct();
+        Map<String, Object> result = MarketQuantAnalytics.calculatePositionSize(
+            pair, accountEquity, riskPct, entryPrice, stopLossPrice, takeProfitPrice, dailyRiskLimitPct
+        );
+        result.put("entry_source", usedLiveSpot ? "live_spot" : "user_specified");
+        if (usedLiveSpot) {
+            result.put("as_of", clock.instant().toString());
+        }
+        return write(result);
+    }
+
+    private Double readDailyRiskLimitPct() {
+        try {
+            List<String> values = jdbcTemplate.query(
+                "SELECT value FROM settings WHERE key = 'daily_risk_limit_pct'",
+                (rs, rowNum) -> rs.getString("value")
+            );
+            if (values.isEmpty() || values.getFirst() == null || values.getFirst().isBlank()) {
+                return null;
+            }
+            return Double.parseDouble(values.getFirst().trim());
+        } catch (DataAccessException | NumberFormatException ignored) {
+            return null;
+        }
+    }
+
+    private static int validateHistoryDays(int days) {
         if (days < 1 || days > MAX_HISTORY_DAYS) {
             throw new IllegalArgumentException("days must be between 1 and " + MAX_HISTORY_DAYS);
         }
-        List<HistoricalPoint> points = marketDataService.fetchHistorical(pair, days);
-        if (points.isEmpty()) {
+        return days;
+    }
+
+    private Map<String, Object> historicalBody(
+        String pair,
+        int days,
+        List<HistoricalPoint> points,
+        int maxSamplePoints
+    ) {
+        if (points == null || points.isEmpty()) {
             return new LinkedHashMap<>(Map.of(
                 "available", false,
                 "pair", pair,
@@ -259,94 +328,8 @@ public class AssistantTools {
         body.put("end", point(last));
         body.put("change", change);
         body.put("change_percent", changePercent);
-        body.put("series", sample(points, MAX_SERIES_POINTS).stream().map(this::point).toList());
+        body.put("series", sample(points, maxSamplePoints).stream().map(this::point).toList());
         return body;
-    }
-
-    private String alertHistory(JsonNode arguments) {
-        String pair = optionalPair(arguments);
-        int limit = arguments.path("limit").asInt(10);
-        if (limit < 1 || limit > MAX_ALERTS) {
-            throw new IllegalArgumentException("limit must be between 1 and " + MAX_ALERTS);
-        }
-        List<Map<String, Object>> alerts = jdbcTemplate.query("""
-                SELECT pair, percent_change, old_rate, new_rate, timestamp, email_sent,
-                       alert_type, trigger_value, threshold_value
-                FROM alerts
-                WHERE (? IS NULL OR pair = ?)
-                ORDER BY timestamp DESC
-                LIMIT ?
-                """,
-            (resultSet, rowNumber) -> {
-                Map<String, Object> alert = new LinkedHashMap<>();
-                alert.put("pair", resultSet.getString("pair"));
-                alert.put("alert_type", resultSet.getString("alert_type"));
-                alert.put("percent_change", resultSet.getObject("percent_change"));
-                alert.put("old_rate", resultSet.getObject("old_rate"));
-                alert.put("new_rate", resultSet.getObject("new_rate"));
-                alert.put("trigger_value", resultSet.getObject("trigger_value"));
-                alert.put("threshold_value", resultSet.getObject("threshold_value"));
-                alert.put("email_sent", resultSet.getBoolean("email_sent"));
-                OffsetDateTime timestamp = resultSet.getObject("timestamp", OffsetDateTime.class);
-                alert.put("timestamp", timestamp == null ? null : timestamp.toInstant().toString());
-                return alert;
-            },
-            pair, pair, limit
-        );
-        return write(Map.of("count", alerts.size(), "alerts", alerts));
-    }
-
-    private String alertPreferences(JsonNode arguments) {
-        String pair = optionalPair(arguments);
-        List<Map<String, Object>> rules = jdbcTemplate.query("""
-                SELECT pair, enabled, alert_type, custom_threshold, custom_period,
-                       enable_trend_consistency, lookback_years, price_high, price_low,
-                       trigger_type, volatility_type, ma_short_period, ma_long_period, signal_type
-                FROM alert_preferences
-                WHERE (? IS NULL OR pair = ?)
-                ORDER BY pair
-                """,
-            (resultSet, rowNumber) -> {
-                Map<String, Object> rule = new LinkedHashMap<>();
-                rule.put("pair", resultSet.getString("pair"));
-                rule.put("enabled", resultSet.getBoolean("enabled"));
-                rule.put("alert_type", resultSet.getString("alert_type"));
-                rule.put("custom_threshold", resultSet.getObject("custom_threshold"));
-                rule.put("custom_period", resultSet.getObject("custom_period"));
-                rule.put("enable_trend_consistency", resultSet.getBoolean("enable_trend_consistency"));
-                rule.put("lookback_years", resultSet.getInt("lookback_years"));
-                rule.put("price_high", resultSet.getObject("price_high"));
-                rule.put("price_low", resultSet.getObject("price_low"));
-                rule.put("trigger_type", resultSet.getString("trigger_type"));
-                rule.put("volatility_type", resultSet.getString("volatility_type"));
-                rule.put("ma_short_period", resultSet.getInt("ma_short_period"));
-                rule.put("ma_long_period", resultSet.getInt("ma_long_period"));
-                rule.put("signal_type", resultSet.getString("signal_type"));
-                return rule;
-            },
-            pair, pair
-        );
-        return write(Map.of("count", rules.size(), "preferences", rules));
-    }
-
-    private String monitoringState(JsonNode arguments) {
-        String pair = optionalPair(arguments);
-        List<Map<String, Object>> rows = jdbcTemplate.query("""
-                SELECT pair, last_alert_time
-                FROM monitoring_state
-                WHERE (? IS NULL OR pair = ?)
-                ORDER BY pair
-                """,
-            (resultSet, rowNumber) -> {
-                Map<String, Object> row = new LinkedHashMap<>();
-                row.put("pair", resultSet.getString("pair"));
-                OffsetDateTime lastAlert = resultSet.getObject("last_alert_time", OffsetDateTime.class);
-                row.put("last_alert_time", lastAlert == null ? null : lastAlert.toInstant().toString());
-                return row;
-            },
-            pair, pair
-        );
-        return write(Map.of("count", rows.size(), "monitoring", rows));
     }
 
     private String settings() {
@@ -623,68 +606,15 @@ public class AssistantTools {
         return schema(props, List.of("pair", "condition_type"));
     }
 
-    private String latestForecast(JsonNode arguments) {
-        String asset = optionalAsset(arguments);
-        List<Map<String, Object>> runs = jdbcTemplate.query("""
-                SELECT id, created_at, model_type, lookback_days, horizon_days, asset, notes
-                FROM dl_forecast_runs
-                WHERE (? IS NULL OR asset = ?)
-                ORDER BY id DESC
-                LIMIT 1
-                """,
-            (resultSet, rowNumber) -> {
-                Map<String, Object> run = new LinkedHashMap<>();
-                run.put("id", resultSet.getLong("id"));
-                run.put("created_at", resultSet.getString("created_at"));
-                run.put("model_type", resultSet.getString("model_type"));
-                run.put("lookback_days", resultSet.getInt("lookback_days"));
-                run.put("horizon_days", resultSet.getInt("horizon_days"));
-                run.put("asset", resultSet.getString("asset"));
-                run.put("notes", resultSet.getString("notes"));
-                return run;
-            },
-            asset, asset
-        );
-        if (runs.isEmpty()) {
-            return write(Map.of("available", false, "reason", "No forecast has been stored."));
-        }
-        long runId = ((Number) runs.getFirst().get("id")).longValue();
-        List<Map<String, Object>> points = forecastPoints(runId, false);
-        if (points.isEmpty()) {
-            points = forecastPoints(runId, true);
-        }
-        Map<String, Object> body = new LinkedHashMap<>();
-        body.put("available", !points.isEmpty());
-        body.put("run", runs.getFirst());
-        body.put("point_count", points.size());
-        body.put("forecast", sampleMaps(points, MAX_FORECAST_POINTS));
-        body.put("note", "Stored model path. It is not a live quote and not a guaranteed future price.");
-        if (points.isEmpty()) {
-            body.put("reason", "The forecast run has no stored points.");
-        }
-        return write(body);
-    }
-
-    private List<Map<String, Object>> forecastPoints(long runId, boolean gold) {
-        String sql = gold
-            ? """
-                SELECT dt, predicted_close
-                FROM gold_forecast_daily
-                WHERE run_id = ?
-                ORDER BY dt
-                """
-            : """
-                SELECT dt, predicted_close
-                FROM asset_forecast_daily
-                WHERE run_id = ?
-                ORDER BY dt
-                """;
-        return jdbcTemplate.query(sql, (resultSet, rowNumber) -> {
-            Map<String, Object> point = new LinkedHashMap<>();
-            point.put("dt", resultSet.getString("dt"));
-            point.put("predicted_close", resultSet.getDouble("predicted_close"));
-            return point;
-        }, runId);
+    private static Map<String, Object> positionSizeSchema() {
+        Map<String, Object> props = new LinkedHashMap<>();
+        props.put("pair", stringProp("Pair such as EUR/USD or GOLD/USD"));
+        props.put("account_equity", numberProp("Total account equity (positive number)"));
+        props.put("risk_pct", numberProp("Percentage of equity to risk on this setup (e.g. 1.0 for 1%)"));
+        props.put("stop_loss_price", numberProp("Planned stop-loss price"));
+        props.put("entry_price", numberProp("Optional planned entry price; omit to use live spot rate"));
+        props.put("take_profit_price", numberProp("Optional take-profit target price for R:R calculation"));
+        return schema(props, List.of("pair", "account_equity", "risk_pct", "stop_loss_price"));
     }
 
     private JsonNode parseArguments(String argumentsJson) {
@@ -716,10 +646,6 @@ public class AssistantTools {
 
     private static String optionalPair(JsonNode arguments) {
         return optionalSymbol(arguments, "pair");
-    }
-
-    private static String optionalAsset(JsonNode arguments) {
-        return optionalSymbol(arguments, "asset");
     }
 
     private static String optionalSymbol(JsonNode arguments, String field) {
@@ -754,18 +680,6 @@ public class AssistantTools {
             return points;
         }
         List<HistoricalPoint> sampled = new ArrayList<>(maxPoints);
-        double step = (points.size() - 1) / (double) (maxPoints - 1);
-        for (int index = 0; index < maxPoints; index++) {
-            sampled.add(points.get((int) Math.round(index * step)));
-        }
-        return sampled;
-    }
-
-    private static List<Map<String, Object>> sampleMaps(List<Map<String, Object>> points, int maxPoints) {
-        if (points.size() <= maxPoints) {
-            return points;
-        }
-        List<Map<String, Object>> sampled = new ArrayList<>(maxPoints);
         double step = (points.size() - 1) / (double) (maxPoints - 1);
         for (int index = 0; index < maxPoints; index++) {
             sampled.add(points.get((int) Math.round(index * step)));

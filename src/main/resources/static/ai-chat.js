@@ -241,13 +241,15 @@
         const labels = {
             get_live_rates: 'Looking up live rates...',
             get_historical_series: 'Looking up price history...',
-            compare_pairs: 'Comparing the two pairs...',
-            get_alert_history: 'Looking up alerts...',
-            get_alert_preferences: 'Looking up alert rules...',
-            get_monitoring_state: 'Looking up monitoring state...',
+            compare_pairs: 'Comparing pairs & correlation...',
+            analyze_pair_technicals: 'Calculating technical indicators...',
+            calculate_position_size: 'Calculating position size & risk...',
+            list_my_alert_rules: 'Loading your alert rules...',
+            get_my_alert_inbox: 'Checking your alert inbox...',
+            create_alert_rule: 'Creating your alert rule...',
+            update_alert_rule_status: 'Updating your alert rule...',
             get_settings: 'Looking up settings...',
-            get_latest_forecast: 'Looking up the stored forecast...',
-            search_notes: 'Searching the notes...'
+            search_notes: 'Searching the knowledge base...'
         };
         return labels[tool] || 'Looking up application data...';
     }
