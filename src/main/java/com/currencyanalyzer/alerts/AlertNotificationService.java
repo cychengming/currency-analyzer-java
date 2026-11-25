@@ -1,6 +1,7 @@
 package com.currencyanalyzer.alerts;
 
 import com.currencyanalyzer.alerts.AlertMonitoringRepository.AlertEntry;
+import com.currencyanalyzer.alerts.UserAlertRuleRepository.UserAlertEntry;
 import com.currencyanalyzer.pubsub.AlertTriggeredEvent;
 import com.currencyanalyzer.pubsub.GoogleHttpSupport;
 import org.slf4j.Logger;
@@ -27,6 +28,7 @@ public class AlertNotificationService {
     private static final String KEY_SUCCESS = "success";
 
     private final AlertMonitoringRepository repository;
+    private final UserAlertRuleRepository userRuleRepository;
     private final AlertMonitoringService monitoringService;
     private final RestClient restClient;
     private final String webhookUrl;
@@ -36,6 +38,7 @@ public class AlertNotificationService {
     @Autowired
     public AlertNotificationService(
         AlertMonitoringRepository repository,
+        UserAlertRuleRepository userRuleRepository,
         AlertMonitoringService monitoringService,
         RestClient.Builder restClientBuilder,
         @Value("${app.alerts.webhook-url:}") String webhookUrl,
@@ -44,6 +47,7 @@ public class AlertNotificationService {
     ) {
         this(
             repository,
+            userRuleRepository,
             monitoringService,
             GoogleHttpSupport.buildRestClient(restClientBuilder),
             webhookUrl,
@@ -60,7 +64,20 @@ public class AlertNotificationService {
         String resendApiKey,
         String resendFromEmail
     ) {
+        this(repository, null, monitoringService, restClient, webhookUrl, resendApiKey, resendFromEmail);
+    }
+
+    AlertNotificationService(
+        AlertMonitoringRepository repository,
+        UserAlertRuleRepository userRuleRepository,
+        AlertMonitoringService monitoringService,
+        RestClient restClient,
+        String webhookUrl,
+        String resendApiKey,
+        String resendFromEmail
+    ) {
         this.repository = repository;
+        this.userRuleRepository = userRuleRepository;
         this.monitoringService = monitoringService;
         this.restClient = restClient;
         this.webhookUrl = trim(webhookUrl);
@@ -93,15 +110,52 @@ public class AlertNotificationService {
             event.thresholdValue()
         );
 
-        dispatchWebhook(summary, event);
-        dispatchEmail(
-            "Currency Analyzer Alert: " + event.pair(),
-            summary,
-            configuredAlertEmail()
-        );
+        Optional<UserAlertEntry> userAlert = userRuleRepository == null
+            ? Optional.empty()
+            : userRuleRepository.findUserAlertById(event.alertId());
+        Long ownerUserId = userAlert.map(UserAlertEntry::userId).orElse(event.userId());
+
+        if (ownerUserId != null) {
+            if (!Boolean.FALSE.equals(event.notifyEmail()) && userRuleRepository != null) {
+                String userRecipient = trim(userRuleRepository.findAlertEmail(ownerUserId));
+                String subject = buildUserSubject(event);
+                dispatchEmail(subject, summary, userRecipient);
+            }
+        } else {
+            dispatchWebhook(summary, event);
+            dispatchEmail(
+                "Currency Analyzer Alert: " + event.pair(),
+                summary,
+                configuredAlertEmail()
+            );
+        }
 
         repository.markAlertDelivered(event.alertId());
         return new DeliveryResult("delivered", null, event.alertId());
+    }
+
+    public Map<String, Object> sendUserTestEmail(long userId) {
+        String recipient = userRuleRepository == null ? "" : trim(userRuleRepository.findAlertEmail(userId));
+        if (resendApiKey.isEmpty() || recipient.isEmpty()) {
+            return Map.of(
+                KEY_SUCCESS, false,
+                "error", "Save your personal Alert Email first and ensure RESEND_API_KEY is configured."
+            );
+        }
+        String summary = "Currency Analyzer personal test alert — your email delivery is configured and working.";
+        dispatchEmail("Currency Analyzer Personal Test Alert", summary, recipient);
+        return Map.of(
+            KEY_SUCCESS, true,
+            "message", "Personal test alert email sent successfully."
+        );
+    }
+
+    private static String buildUserSubject(AlertTriggeredEvent event) {
+        String ruleName = trim(event.ruleName());
+        if (ruleName.isEmpty()) {
+            return "Currency Analyzer Alert: " + event.pair();
+        }
+        return "Currency Analyzer Alert: " + event.pair() + " — " + ruleName;
     }
 
     public Map<String, Object> sendTestNotification() {
