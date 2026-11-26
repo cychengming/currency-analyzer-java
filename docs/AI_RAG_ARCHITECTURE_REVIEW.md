@@ -97,6 +97,10 @@ Severity: **High** · **Medium** · **Low**
 4. **R1:** Rename chunk config properties to `app.rag.chunk-max-tokens` (`155`) and `app.rag.chunk-overlap-tokens` (`28`, ~18% overlap), preserving fallback support for legacy `chunk-max-chars` / `chunk-overlap-chars`.
 5. **E3:** Expose `currency_analyzer_rag_retrieval_seconds`, `currency_analyzer_rag_hits`, `currency_analyzer_rag_empty_total`, `currency_analyzer_rag_embedding_total`, and `currency_analyzer_rag_embedding_seconds` on `/metrics` and `/actuator/prometheus`.
 
+#### 4.1 Token Economics of Pre-Retrieval Gating (~20–40% Savings on Operational Turns)
+
+Tool-using turns execute at least **two** model calls inside `SpringAiChatRunner` (Round 1: tool selection; Round 2: answer synthesis). Before Phase 1, unconditional pre-retrieval routinely matched generic terms (`EUR/USD`, `rate`, `alert`) against guides and injected `500–1,200` tokens of `UNTRUSTED REFERENCE CONTEXT` that stayed in the prompt for **every round**—billing `1,000–2,400` unnecessary tokens against a `~3,850`-token 2-round baseline (**~21%–38%** total input overhead). Skipping pre-retrieval via `RetrievalIntentGate` on pure operational turns (while retaining on-demand `search_notes` and deduplicating attached `KnowledgeNote.path()` IDs through `ToolUserContext`) eliminates that repeated multi-round tax without losing recall on hybrid queries.
+
 ### Phase 2 — Retrieval & Answer Quality *(2–4 weeks)*
 1. **Cross-encoder reranker (R4 + R2 + R3):** Score the top 20–24 RRF candidates using `bge-reranker-v2-m3` (local ONNX or hosted rerank API) and calibrate the cutoff on reranker scores, retiring brittle magic boosts.
 2. **Parent/child small-to-big chunking (R1):** Index small child chunks (~150 tokens) for high-precision matching while injecting their parent section (~600–900 tokens) into prompt context, replacing `expandStrongDocuments`.
@@ -116,3 +120,25 @@ Severity: **High** · **Medium** · **Low**
 
 1. **Local ONNX vs. Hosted API:** Should Phase 2 reranking (`bge-reranker-v2-m3`) and upgraded embeddings (`bge-m3`) remain strictly local ONNX on Cloud Run CPU/RAM, or can external hosted inference APIs be used?
 2. **Private Per-User Documents (E5):** Are private user uploads (`journal/`, holdings) planned? If yes, add `visibility` and `owner_username` filtering to `rag_documents` and `RagDocumentRepository` before Phase 2 schema migrations.
+
+---
+
+## 6. Enterprise Agent & RAG Design Principles (Reference Guide)
+
+These ten engineering principles synthesize modern production Agent & RAG practices (Anthropic "Building Effective Agents", OpenAI practical agent guidelines, OWASP Top 10 for LLM Applications, and two-stage RAG architectures) and map each directly onto `currency-analyzer-java`.
+
+### Architecture & Context Engineering
+1. **Deterministic Workflows First; Bounded Agent Loops Where Needed:** Do not delegate deterministic calculations or state checks to probabilistic LLM tokens when code or typed tools are cheaper, faster, and exact. Compute indicators, correlations, and position sizing deterministically (`Ta4j` + `Hipparchus`), and strictly bound agent autonomy (`MAX_TOOL_ROUNDS = 3`, `MAX_TOOL_CALLS_PER_ROUND = 4`).
+2. **Adaptive & Agentic Retrieval Over Blind "Always-On" Context Stuffing:** Never blindly pre-inject top-k chunks on every turn. In multi-round tool loops, pre-injected text is re-billed on every round and dilutes model attention. Gate pre-retrieval (`RetrievalIntentGate`), expose retrieval as an explicit tool (`search_notes`), and deduplicate already-attached chunks per turn (`ToolUserContext`).
+3. **Multi-Turn Context Hygiene & Lean Tool Surfaces:** Keep tool schemas small, orthogonal, and non-overlapping (11 focused tools after retiring 4 overlapping legacy tools). Strip historical `reasoning_content` across completed turns (`~30–60%` token savings), cap serialized tool outputs, and summarize long histories rather than overflowing context windows.
+
+### Retrieval & Data Lifecycle
+4. **Two-Stage Hybrid Retrieval (Broad Recall -> Cross-Encoder Rerank):** Combine semantic bi-encoder search (`pgvector`) with lexical search (BM25 / `pg_trgm`) via Reciprocal Rank Fusion (`RRF`) for high recall, then calibrate precision with a cross-encoder reranker instead of maintaining brittle magic-number thresholds (`0.70`, `×0.60`, `+42`) across incompatible score scales.
+5. **Chunk for Retrieval, Expand for Generation ("Small-to-Big" + Contextual Headers):** Bi-encoder embeddings are sharpest on concise, contextually anchored chunks (`title + heading + lead` within CJK-weighted token budgets), whereas LLMs synthesize better from fuller parent sections (~600–900 tokens). Prefer parent-child mapping and low (~15–20%) chunk overlap over ~50% overlap and ad-hoc sibling heuristics.
+6. **Derived, Versioned, Race-Safe Indexing:** Treat object storage (`GCS`) as the immutable source of truth and vector/chunk tables as rebuildable derived indexes. Guard async ingestion against out-of-order writes and deletes (`sequence` + SHA-256 conditional SQL updates), and store `embedding_model` + `embedding_dim` on chunks so model upgrades can backfill zero-downtime.
+
+### Safety, Infrastructure Ops & Evaluation
+7. **Defense-in-Depth Against Indirect Prompt Injection & Excessive Agency (OWASP LLM01 / LLM06):** Isolate retrieved text and tool output outside the `system` prompt inside untrusted delimiters, bind user identity (`ToolUserContext`) server-side from the authenticated session (never from LLM arguments), and gate state-mutating tools behind server-persisted confirmation steps rather than prompt instructions alone.
+8. **Compute Isolation & FinOps Circuit Breakers:** Keep CPU/JNI inference (local ONNX embeddings/rerankers) on small bounded platform thread pools plus LRU caches—never on unbounded virtual threads alongside DB/HTTP traffic. Enforce per-user and global active-stream caps, in-flight quota checks, and daily USD spend circuit breakers at the service boundary.
+9. **Verifiable Grounding & Structured Citations:** Every quantitative figure in an answer should trace to a live tool payload (`as_of` timestamp / series dates), and every knowledge claim should trace to a numbered source chunk (`[1]`, `[2]`) exposed in the UI with source links—never relying solely on free-text titles.
+10. **Evaluation-Driven Iteration (Offline Benchmarks + Online Telemetry):** Gate retrieval changes with automated bilingual golden sets (`Recall@k`, `MRR`, `nDCG` under real vector + lexical engines) and LLM-as-judge faithfulness/citation checks, paired with live Prometheus observability (`TTFT`, token cost, cache hit rate, empty-retrieval rate, and DSML recovery count).
