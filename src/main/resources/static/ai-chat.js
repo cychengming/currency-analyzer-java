@@ -55,10 +55,19 @@
     document.addEventListener('DOMContentLoaded', initializeAiChat);
 
     async function initializeAiChat() {
-        const statusResponse = await fetch('/api/ai/status', { credentials: 'include' });
+        const [statusResponse, authResponse] = await Promise.all([
+            fetch('/api/ai/status', { credentials: 'include' }),
+            fetch('/api/auth/status', { credentials: 'include' })
+        ]);
         if (!statusResponse.ok) return;
         const status = await statusResponse.json();
         if (!status.enabled) return;
+        if (authResponse.ok) {
+            const authStatus = await authResponse.json();
+            if (authStatus && authStatus.can_use_ai === false) {
+                return;
+            }
+        }
 
         const openButton = document.getElementById('aiChatOpenButton');
         const panel = document.getElementById('aiChatPanel');

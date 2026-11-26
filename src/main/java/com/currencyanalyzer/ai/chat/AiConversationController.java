@@ -1,5 +1,6 @@
 package com.currencyanalyzer.ai.chat;
 
+import com.currencyanalyzer.auth.RoleGuard;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
@@ -26,19 +27,26 @@ import java.util.UUID;
 @ConditionalOnProperty(name = "app.ai.enabled", havingValue = "true")
 public class AiConversationController {
 
+    private static final String VIEWER_AI_DENIED =
+        "Viewer accounts have read-only access and cannot use the AI assistant";
+
     private final AiConversationService conversationService;
+    private final RoleGuard roleGuard;
     private final long streamTimeoutMillis;
 
     public AiConversationController(
         AiConversationService conversationService,
+        RoleGuard roleGuard,
         @Value("${app.ai.request-timeout-seconds:60}") int requestTimeoutSeconds
     ) {
         this.conversationService = conversationService;
+        this.roleGuard = roleGuard;
         this.streamTimeoutMillis = (requestTimeoutSeconds + 10L) * 1000;
     }
 
     @PostMapping
     public ResponseEntity<AiConversation> create(Authentication authentication) {
+        roleGuard.requireMemberOrAdmin(authentication, VIEWER_AI_DENIED);
         return ResponseEntity.status(HttpStatus.CREATED)
             .body(conversationService.create(authentication.getName()));
     }
@@ -48,6 +56,7 @@ public class AiConversationController {
         Authentication authentication,
         @RequestParam(defaultValue = "20") int limit
     ) {
+        roleGuard.requireMemberOrAdmin(authentication, VIEWER_AI_DENIED);
         return conversationService.list(authentication.getName(), limit);
     }
 
@@ -56,6 +65,7 @@ public class AiConversationController {
         Authentication authentication,
         @PathVariable UUID conversationId
     ) {
+        roleGuard.requireMemberOrAdmin(authentication, VIEWER_AI_DENIED);
         Optional<List<AiMessage>> messages = conversationService.messages(authentication.getName(), conversationId);
         return messages.isEmpty()
             ? ResponseEntity.notFound().build()
@@ -72,6 +82,7 @@ public class AiConversationController {
         @PathVariable UUID conversationId,
         @RequestBody(required = false) SendMessageRequest request
     ) {
+        roleGuard.requireMemberOrAdmin(authentication, VIEWER_AI_DENIED);
         if (!conversationService.ownsConversation(authentication.getName(), conversationId)) {
             return ResponseEntity.notFound().build();
         }
@@ -92,6 +103,7 @@ public class AiConversationController {
         Authentication authentication,
         @PathVariable UUID conversationId
     ) {
+        roleGuard.requireMemberOrAdmin(authentication, VIEWER_AI_DENIED);
         if (!conversationService.cancel(authentication.getName(), conversationId)) {
             return ResponseEntity.notFound().build();
         }
@@ -103,6 +115,7 @@ public class AiConversationController {
         Authentication authentication,
         @PathVariable UUID conversationId
     ) {
+        roleGuard.requireMemberOrAdmin(authentication, VIEWER_AI_DENIED);
         if (!conversationService.delete(authentication.getName(), conversationId)) {
             return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of(
                 "success", false,

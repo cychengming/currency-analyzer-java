@@ -5,6 +5,7 @@ import com.currencyanalyzer.alerts.UserAlertRuleService.AlertRuleView;
 import com.currencyanalyzer.alerts.UserAlertRuleService.ProfileRequest;
 import com.currencyanalyzer.alerts.UserAlertRuleService.RuleRequest;
 import com.currencyanalyzer.alerts.UserAlertRuleService.UserAlertProfile;
+import com.currencyanalyzer.auth.RoleGuard;
 import com.currencyanalyzer.auth.UserAccount;
 import com.currencyanalyzer.auth.UserRepository;
 import org.springframework.http.HttpStatus;
@@ -30,19 +31,24 @@ public class UserAlertRuleController {
 
     private static final String KEY_SUCCESS = "success";
     private static final String KEY_ERROR = "error";
+    private static final String VIEWER_WRITE_DENIED =
+        "Viewer accounts have read-only access and cannot modify alerts or settings";
 
     private final UserAlertRuleService ruleService;
     private final AlertNotificationService notificationService;
     private final UserRepository userRepository;
+    private final RoleGuard roleGuard;
 
     public UserAlertRuleController(
         UserAlertRuleService ruleService,
         AlertNotificationService notificationService,
-        UserRepository userRepository
+        UserRepository userRepository,
+        RoleGuard roleGuard
     ) {
         this.ruleService = ruleService;
         this.notificationService = notificationService;
         this.userRepository = userRepository;
+        this.roleGuard = roleGuard;
     }
 
     @GetMapping("/alert-rules")
@@ -55,6 +61,7 @@ public class UserAlertRuleController {
         Authentication authentication,
         @RequestBody(required = false) RuleRequest request
     ) {
+        roleGuard.requireMemberOrAdmin(authentication, VIEWER_WRITE_DENIED);
         AlertRuleView created = ruleService.createRule(requireUserId(authentication), request);
         return ResponseEntity.status(HttpStatus.CREATED).body(created);
     }
@@ -65,6 +72,7 @@ public class UserAlertRuleController {
         @PathVariable UUID id,
         @RequestBody(required = false) RuleRequest request
     ) {
+        roleGuard.requireMemberOrAdmin(authentication, VIEWER_WRITE_DENIED);
         return ruleService.updateRule(requireUserId(authentication), id, request)
             .<ResponseEntity<Object>>map(ResponseEntity::ok)
             .orElseGet(() -> ResponseEntity.status(HttpStatus.NOT_FOUND)
@@ -76,6 +84,7 @@ public class UserAlertRuleController {
         Authentication authentication,
         @PathVariable UUID id
     ) {
+        roleGuard.requireMemberOrAdmin(authentication, VIEWER_WRITE_DENIED);
         boolean deleted = ruleService.deleteRule(requireUserId(authentication), id);
         if (!deleted) {
             return ResponseEntity.status(HttpStatus.NOT_FOUND)
@@ -94,6 +103,7 @@ public class UserAlertRuleController {
         Authentication authentication,
         @PathVariable long id
     ) {
+        roleGuard.requireMemberOrAdmin(authentication, VIEWER_WRITE_DENIED);
         boolean updated = ruleService.markRead(requireUserId(authentication), id);
         if (!updated) {
             return ResponseEntity.status(HttpStatus.NOT_FOUND)
@@ -104,12 +114,14 @@ public class UserAlertRuleController {
 
     @PostMapping("/alert-inbox/read-all")
     public Map<String, Object> markAllRead(Authentication authentication) {
+        roleGuard.requireMemberOrAdmin(authentication, VIEWER_WRITE_DENIED);
         int updated = ruleService.markAllRead(requireUserId(authentication));
         return Map.of(KEY_SUCCESS, true, "updated", updated);
     }
 
     @DeleteMapping("/alert-inbox/clear")
     public Map<String, Object> clearInbox(Authentication authentication) {
+        roleGuard.requireMemberOrAdmin(authentication, VIEWER_WRITE_DENIED);
         int deleted = ruleService.clearInbox(requireUserId(authentication));
         return Map.of(KEY_SUCCESS, true, "deleted", deleted);
     }
@@ -124,11 +136,13 @@ public class UserAlertRuleController {
         Authentication authentication,
         @RequestBody(required = false) ProfileRequest request
     ) {
+        roleGuard.requireMemberOrAdmin(authentication, VIEWER_WRITE_DENIED);
         return ruleService.updateProfile(requireUserId(authentication), request);
     }
 
     @PostMapping("/alert-inbox/test-email")
     public Map<String, Object> sendPersonalTestEmail(Authentication authentication) {
+        roleGuard.requireMemberOrAdmin(authentication, VIEWER_WRITE_DENIED);
         return notificationService.sendUserTestEmail(requireUserId(authentication));
     }
 
