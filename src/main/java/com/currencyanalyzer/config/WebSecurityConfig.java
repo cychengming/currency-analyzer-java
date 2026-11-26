@@ -1,5 +1,8 @@
 package com.currencyanalyzer.config;
 
+import com.currencyanalyzer.auth.AccountStatusFilter;
+import com.currencyanalyzer.auth.KnowledgeAdminService;
+import com.currencyanalyzer.auth.UserRepository;
 import com.currencyanalyzer.pubsub.PubSubAuthenticationFilter;
 import com.currencyanalyzer.pubsub.PubSubOidcVerifier;
 import jakarta.servlet.DispatcherType;
@@ -65,7 +68,9 @@ public class WebSecurityConfig {
     @Order(2)
     SecurityFilterChain securityFilterChain(
         HttpSecurity http,
-        CsrfTokenRepository csrfTokenRepository
+        CsrfTokenRepository csrfTokenRepository,
+        UserRepository userRepository,
+        KnowledgeAdminService knowledgeAdminService
     ) throws Exception {
         http
             .csrf(csrf -> csrf
@@ -73,6 +78,10 @@ public class WebSecurityConfig {
                 .csrfTokenRepository(csrfTokenRepository)
                 .csrfTokenRequestHandler(new CsrfTokenRequestAttributeHandler()))
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.IF_REQUIRED))
+            .addFilterAfter(
+                new AccountStatusFilter(userRepository, knowledgeAdminService),
+                UsernamePasswordAuthenticationFilter.class
+            )
             .authorizeHttpRequests(authorize -> authorize
                 .dispatcherTypeMatchers(DispatcherType.ERROR).permitAll()
                 .requestMatchers(

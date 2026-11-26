@@ -1,16 +1,12 @@
 package com.currencyanalyzer.auth;
 
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.security.core.GrantedAuthority;
-import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.userdetails.User;
 import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.security.core.userdetails.UserDetailsService;
 import org.springframework.security.core.userdetails.UsernameNotFoundException;
 import org.springframework.stereotype.Service;
 
-import java.util.ArrayList;
-import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -40,21 +36,24 @@ public class DatabaseUserDetailsService implements UserDetailsService {
         UserAccount account = userRepository.findByUsername(username)
             .orElseThrow(() -> new UsernameNotFoundException("Invalid username or password"));
 
-        List<GrantedAuthority> authorities = new ArrayList<>();
-        authorities.add(new SimpleGrantedAuthority("ROLE_USER"));
-        if (knowledgeAdminService.isAdminUsername(account.username())) {
-            authorities.add(new SimpleGrantedAuthority("ROLE_ADMIN"));
-        }
+        UserRole effectiveRole = resolveEffectiveRole(account);
 
         return new User(
             account.username(),
             account.passwordHash(),
+            account.isActive(),
             true,
             true,
             true,
-            true,
-            List.copyOf(authorities)
+            effectiveRole.authorities()
         );
+    }
+
+    private UserRole resolveEffectiveRole(UserAccount account) {
+        if (account.role().isAdmin() || knowledgeAdminService.isAdminUsername(account.username())) {
+            return UserRole.ADMIN;
+        }
+        return account.role();
     }
 
     public static Set<String> parseAdminUsers(String csv) {

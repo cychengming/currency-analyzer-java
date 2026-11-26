@@ -1,20 +1,20 @@
 package com.currencyanalyzer.web;
 
 import com.currencyanalyzer.auth.AuthenticationService;
-import com.currencyanalyzer.auth.CompatiblePbkdf2PasswordEncoder;
 import com.currencyanalyzer.auth.KnowledgeAdminService;
 import com.currencyanalyzer.auth.LoginAttemptLimiter;
-import com.currencyanalyzer.auth.UserRepository;
+import com.currencyanalyzer.auth.UserManagementService;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.servlet.http.HttpSession;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.dao.DuplicateKeyException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.authentication.BadCredentialsException;
+import org.springframework.security.authentication.DisabledException;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContext;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -36,10 +36,9 @@ public class AuthController {
 
     private static final Logger log = LoggerFactory.getLogger(AuthController.class);
 
-    private final UserRepository userRepository;
+    private final UserManagementService userManagementService;
     private final KnowledgeAdminService knowledgeAdminService;
     private final AuthenticationService authenticationService;
-    private final CompatiblePbkdf2PasswordEncoder passwordEncoder;
     private final CsrfTokenRepository csrfTokenRepository;
     private final LoginAttemptLimiter loginAttemptLimiter;
     private final boolean registrationEnabled;
@@ -47,18 +46,16 @@ public class AuthController {
         new HttpSessionSecurityContextRepository();
 
     public AuthController(
-        UserRepository userRepository,
+        UserManagementService userManagementService,
         KnowledgeAdminService knowledgeAdminService,
         AuthenticationService authenticationService,
-        CompatiblePbkdf2PasswordEncoder passwordEncoder,
         CsrfTokenRepository csrfTokenRepository,
         LoginAttemptLimiter loginAttemptLimiter,
         @Value("${app.auth.registration-enabled:true}") boolean registrationEnabled
     ) {
-        this.userRepository = userRepository;
+        this.userManagementService = userManagementService;
         this.knowledgeAdminService = knowledgeAdminService;
         this.authenticationService = authenticationService;
-        this.passwordEncoder = passwordEncoder;
         this.csrfTokenRepository = csrfTokenRepository;
         this.loginAttemptLimiter = loginAttemptLimiter;
         this.registrationEnabled = registrationEnabled;
@@ -79,14 +76,16 @@ public class AuthController {
     }
 
     @PostMapping("/register")
-    public ResponseEntity<Map<String, Object>> register(@RequestBody(required = false) Credentials credentials) {
-        if (!registrationEnabled) {
+    public ResponseEntity<Map<String, Object>> register(@RequestBody(required = false) RegisterRequest request) {
+        String username = trim(request == null ? null : request.username());
+        String password = trim(request == null ? null : request.password());
+        String inviteCode = trim(request == null ? null : request.inviteCode());
+        String displayName = trim(request == null ? null : request.displayName());
+        boolean hasInvite = !inviteCode.isEmpty();
+
+        if (!registrationEnabled && !hasInvite) {
             return ResponseEntity.status(HttpStatus.FORBIDDEN).body(failure("Registration is disabled"));
         }
-
-        String username = trim(credentials == null ? null : credentials.username());
-        String password = trim(credentials == null ? null : credentials.password());
-
         if (username.isEmpty() || password.isEmpty()) {
             return ResponseEntity.ok(failure("Username and password required"));
         }
@@ -99,15 +98,14 @@ public class AuthController {
         if (knowledgeAdminService.isReservedAdminName(username)) {
             return ResponseEntity.ok(failure("This username is reserved and cannot be registered"));
         }
-        if (userRepository.existsByUsername(username)) {
-            return ResponseEntity.status(HttpStatus.CONFLICT).body(failure("Username already exists"));
-        }
 
         try {
-            userRepository.create(username, passwordEncoder.encode(password));
+            userManagementService.registerUser(username, password, displayName, inviteCode, registrationEnabled);
             return ResponseEntity.ok(Map.of("success", true, "message", "Registration successful"));
-        } catch (DuplicateKeyException exception) {
-            return ResponseEntity.status(HttpStatus.CONFLICT).body(failure("Username already exists"));
+        } catch (UserManagementService.DuplicateUsernameException exception) {
+            return ResponseEntity.status(HttpStatus.CONFLICT).body(failure(exception.getMessage()));
+        } catch (UserManagementService.RegistrationDisabledException exception) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(failure(exception.getMessage()));
         }
     }
 
@@ -140,11 +138,30 @@ public class AuthController {
             securityContextRepository.saveContext(context, request, response);
             request.getSession(true).setAttribute("username", authentication.getName());
             return ResponseEntity.ok(Map.of("success", true, "message", "Login successful"));
+        } catch (DisabledException exception) {
+            log.info("Blocked login for disabled username={}", username);
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(failure("This account has been disabled"));
         } catch (BadCredentialsException exception) {
             loginAttemptLimiter.recordFailure(clientKey);
             log.info("Login failed for username={}", username);
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(failure("Invalid username or password"));
         }
+    }
+
+    @PostMapping("/change-password")
+    public ResponseEntity<Map<String, Object>> changePassword(
+        Authentication authentication,
+        @RequestBody(required = false) ChangePasswordRequest request
+    ) {
+        if (authentication == null || !authentication.isAuthenticated() || authentication.getName() == null) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(failure("Not authenticated"));
+        }
+        userManagementService.changeOwnPassword(
+            authentication.getName(),
+            request == null ? null : request.currentPassword(),
+            request == null ? null : request.newPassword()
+        );
+        return ResponseEntity.ok(Map.of("success", true, "message", "Password updated"));
     }
 
     @PostMapping("/logout")
@@ -173,5 +190,19 @@ public class AuthController {
     }
 
     public record Credentials(String username, String password) {
+    }
+
+    public record RegisterRequest(
+        String username,
+        String password,
+        @JsonProperty("invite_code") String inviteCode,
+        @JsonProperty("display_name") String displayName
+    ) {
+    }
+
+    public record ChangePasswordRequest(
+        @JsonProperty("current_password") String currentPassword,
+        @JsonProperty("new_password") String newPassword
+    ) {
     }
 }

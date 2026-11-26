@@ -2665,7 +2665,106 @@ body.app-shell-body {
     }
     .app-modal-grid-3,
     .app-modal-grid-2,
-    .app-modal-target-row {
+    .app-modal-target-row,
+    .rbac-admin-grid {
         grid-template-columns: 1fr;
     }
+}
+
+.login-invite-toggle {
+    margin-top: 14px;
+    text-align: center;
+}
+
+.app-user-name {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.app-user-label {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.role-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 7px;
+    border-radius: 999px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    flex-shrink: 0;
+    border: 1px solid var(--border-strong);
+    background: var(--accent-soft);
+    color: var(--accent);
+}
+
+.role-badge-admin {
+    border-color: rgba(52, 211, 153, 0.45);
+    background: rgba(52, 211, 153, 0.14);
+    color: var(--success);
+}
+
+.role-badge-viewer {
+    border-color: rgba(251, 191, 36, 0.45);
+    background: rgba(251, 191, 36, 0.14);
+    color: var(--warning);
+}
+
+.rbac-admin-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 16px;
+}
+
+.rbac-panel-title {
+    font-size: 14px;
+    font-weight: 600;
+    margin-bottom: 12px;
+    color: var(--text);
+}
+
+.rbac-invite-reveal {
+    margin-top: 12px;
+    padding: 10px 12px;
+    border: 1px dashed var(--border-strong);
+    border-radius: var(--radius-sm);
+    background: rgba(13, 26, 43, 0.72);
+}
+
+.rbac-invite-code {
+    margin-top: 6px;
+    font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--success);
+    letter-spacing: 0.06em;
+}
+
+.rbac-inline-select {
+    width: auto;
+    padding: 4px 8px;
+    font-size: 12px;
+}
+
+.rbac-reset-box {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 12px;
+}
+
+.rbac-reset-box[hidden],
+.rbac-invite-reveal[hidden] {
+    display: none;
+}
+
+.rbac-reset-box input {
+    max-width: 240px;
 }

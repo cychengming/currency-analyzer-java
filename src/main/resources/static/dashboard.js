@@ -530,9 +530,156 @@ function loadPages() {
                         <div class="field-hint">Useful on a desktop monitor wall, but distracting if you already rely on email or visual review.</div>
                     </div>
                 </div>
-                <div class="panel-actions" style="margin-top: 20px;">
-                    <button class="btn-primary" style="width: auto; flex: 1;" onclick="saveSettings()">Save Settings</button>
-                    <button class="btn-secondary" style="width: auto; flex: 1;" onclick="testEmail()">Test Email</button>
+                <div id="globalSettingsActions" class="panel-actions" style="margin-top: 20px;">
+                    <button class="btn-primary" id="saveSettingsBtn" style="width: auto; flex: 1;" onclick="saveSettings()">Save Settings</button>
+                    <button class="btn-secondary" id="testEmailBtn" style="width: auto; flex: 1;" onclick="testEmail()">Test Email</button>
+                </div>
+                <div id="globalSettingsReadOnlyHint" class="muted-copy" style="margin-top: 12px;" hidden>Global monitoring settings are managed by workspace administrators.</div>
+            </div>
+
+            <!-- Personal Account & Password Card (All Roles) -->
+            <div class="card" style="margin-top: 20px;">
+                <div class="page-intro">
+                    <div class="page-intro-copy">
+                        <div class="page-eyebrow">My Account</div>
+                        <div class="page-heading">Profile, role &amp; password</div>
+                        <div class="page-subtext" id="accountRoleSummary">Loading account permissions...</div>
+                    </div>
+                </div>
+                <div id="accountPasswordNotice" class="inline-banner" style="display:none;"></div>
+                <div class="form-grid-2" style="gap: 16px;">
+                    <div class="form-group">
+                        <label for="currentPasswordInput">Current Password</label>
+                        <input type="password" id="currentPasswordInput" placeholder="Enter current password" autocomplete="current-password">
+                    </div>
+                    <div class="form-group">
+                        <label for="newPasswordInput">New Password</label>
+                        <input type="password" id="newPasswordInput" placeholder="Minimum 6 characters" autocomplete="new-password">
+                    </div>
+                </div>
+                <div class="panel-actions" style="margin-top: 14px;">
+                    <button type="button" class="btn-secondary" id="changeOwnPasswordBtn" style="width: auto;" onclick="submitOwnPasswordChange()">Update Password</button>
+                </div>
+            </div>
+
+            <!-- Admin Users & Invite Management Card -->
+            <div class="card" id="adminAccessCard" style="margin-top: 20px;" hidden>
+                <div class="page-intro">
+                    <div class="page-intro-copy">
+                        <div class="page-eyebrow">Administration</div>
+                        <div class="page-heading">Users &amp; single-use invites</div>
+                        <div class="page-subtext">Provision team accounts, issue expiring single-use invite links, or adjust roles and account status.</div>
+                    </div>
+                    <button type="button" class="btn-secondary" style="width: auto;" onclick="refreshAccessManagement()">Refresh</button>
+                </div>
+                <div id="adminAccessNotice" class="inline-banner" style="display:none;"></div>
+
+                <div class="rbac-admin-grid">
+                    <div class="soft-panel">
+                        <h3 class="rbac-panel-title">Create Account Directly</h3>
+                        <div class="form-grid-2" style="gap: 12px;">
+                            <div class="form-group" style="margin:0;">
+                                <label for="adminNewUsername">Username</label>
+                                <input type="text" id="adminNewUsername" placeholder="Min 3 chars">
+                            </div>
+                            <div class="form-group" style="margin:0;">
+                                <label for="adminNewDisplayName">Display Name</label>
+                                <input type="text" id="adminNewDisplayName" placeholder="Optional">
+                            </div>
+                            <div class="form-group" style="margin:0;">
+                                <label for="adminNewPassword">Initial Password</label>
+                                <input type="password" id="adminNewPassword" placeholder="Min 6 chars">
+                            </div>
+                            <div class="form-group" style="margin:0;">
+                                <label for="adminNewRole">Role</label>
+                                <select id="adminNewRole">
+                                    <option value="MEMBER" selected>MEMBER (Alerts &amp; AI)</option>
+                                    <option value="VIEWER">VIEWER (Read-Only)</option>
+                                    <option value="ADMIN">ADMIN (Full Admin)</option>
+                                </select>
+                            </div>
+                        </div>
+                        <button type="button" class="btn-primary" style="margin-top: 12px; width: auto;" onclick="createAdminUser()">Create User</button>
+                    </div>
+
+                    <div class="soft-panel">
+                        <h3 class="rbac-panel-title">Generate Single-Use Invite Code</h3>
+                        <div class="form-grid-2" style="gap: 12px;">
+                            <div class="form-group" style="margin:0;">
+                                <label for="inviteRoleSelect">Assigned Role</label>
+                                <select id="inviteRoleSelect">
+                                    <option value="MEMBER" selected>MEMBER</option>
+                                    <option value="VIEWER">VIEWER</option>
+                                    <option value="ADMIN">ADMIN</option>
+                                </select>
+                            </div>
+                            <div class="form-group" style="margin:0;">
+                                <label for="inviteExpirySelect">Expires In</label>
+                                <select id="inviteExpirySelect">
+                                    <option value="24">24 hours</option>
+                                    <option value="72" selected>72 hours</option>
+                                    <option value="168">7 days</option>
+                                    <option value="720">30 days</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="form-group" style="margin-top: 12px; margin-bottom: 0;">
+                            <label for="inviteNoteInput">Note (optional)</label>
+                            <input type="text" id="inviteNoteInput" placeholder="e.g. Analyst account">
+                        </div>
+                        <button type="button" class="btn-secondary" style="margin-top: 12px; width: auto;" onclick="generateInviteCode()">Generate Invite</button>
+                        <div id="generatedInviteBox" class="rbac-invite-reveal" hidden>
+                            <div class="muted-copy">Share this one-time code or signup link (shown only once):</div>
+                            <div class="rbac-invite-code" id="generatedInviteCode"></div>
+                            <div class="panel-actions" style="margin-top: 8px;">
+                                <button type="button" class="btn-secondary" style="width: auto;" onclick="copyGeneratedInvite('code')">Copy Code</button>
+                                <button type="button" class="btn-secondary" style="width: auto;" onclick="copyGeneratedInvite('link')">Copy Invite Link</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div style="margin-top: 20px;">
+                    <h3 class="rbac-panel-title">Users Directory</h3>
+                    <div id="adminResetBox" class="soft-panel rbac-reset-box" hidden>
+                        <span id="adminResetLabel" class="muted-copy">Reset password</span>
+                        <input type="password" id="adminResetPasswordInput" placeholder="New password (min 6 chars)">
+                        <button type="button" class="btn-primary" style="width:auto;" onclick="applyAdminPasswordReset()">Apply Reset</button>
+                        <button type="button" class="btn-secondary" style="width:auto;" onclick="cancelAdminPasswordReset()">Cancel</button>
+                    </div>
+                    <div class="table-wrap">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>User</th>
+                                    <th>Role</th>
+                                    <th>Status</th>
+                                    <th>Last Login</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="adminUsersTableBody"></tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <div style="margin-top: 20px;">
+                    <h3 class="rbac-panel-title">Recent Invites</h3>
+                    <div class="table-wrap">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>Prefix</th>
+                                    <th>Role</th>
+                                    <th>State</th>
+                                    <th>Expires</th>
+                                    <th>Redeemed By</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="adminInvitesTableBody"></tbody>
+                        </table>
+                    </div>
                 </div>
             </div>
         </div>
@@ -1073,6 +1220,9 @@ window.handleDashboardPageChange = function handleDashboardPageChange(page) {
     }
     if (page === 'overview' && typeof renderMarketsShell === 'function') {
         renderMarketsShell();
+    }
+    if (page === 'settings' && typeof refreshAccessManagement === 'function') {
+        refreshAccessManagement();
     }
 };
 

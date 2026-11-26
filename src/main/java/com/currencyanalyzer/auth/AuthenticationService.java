@@ -33,6 +33,7 @@ public class AuthenticationService {
             if (passwordEncoder.upgradeEncoding(account.passwordHash())) {
                 userRepository.updatePasswordHash(account.id(), passwordEncoder.encode(password));
             }
+            userRepository.recordLastLogin(account.id());
         });
 
         return authentication;
