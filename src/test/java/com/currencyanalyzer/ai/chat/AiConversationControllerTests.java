@@ -404,7 +404,9 @@ class AiConversationControllerTests {
         mockMvc.perform(get("/metrics"))
             .andExpect(status().isOk())
             .andExpect(content().string(org.hamcrest.Matchers.containsString("currency_analyzer_ai_requests_total")))
-            .andExpect(content().string(org.hamcrest.Matchers.containsString("currency_analyzer_ai_tool_calls_total")));
+            .andExpect(content().string(org.hamcrest.Matchers.containsString("currency_analyzer_ai_tool_calls_total")))
+            .andExpect(content().string(org.hamcrest.Matchers.containsString("currency_analyzer_rag_retrieval_seconds")))
+            .andExpect(content().string(org.hamcrest.Matchers.containsString("mode=\"skipped\"")));
     }
 
     @Test

@@ -1,15 +1,19 @@
 package com.currencyanalyzer.ai.rag;
 
+import com.currencyanalyzer.ai.chat.AiMetrics;
 import com.currencyanalyzer.ai.knowledge.KnowledgeNote;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.embedding.EmbeddingModel;
 
 import java.util.Collection;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyDouble;
@@ -18,6 +22,7 @@ import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -154,5 +159,56 @@ class RagChunkRetrieverTests {
         assertEquals(dualId, fused.getFirst().documentId());
         assertTrue(fused.getFirst().score() > 0.95);
         assertTrue(fused.get(1).score() <= 0.51);
+    }
+
+    @Test
+    void cachesQueryEmbeddingsOffloadsOntoBoundedPlatformPoolAndRecordsRagMetrics() {
+        RagDocumentRepository repository = mock(RagDocumentRepository.class);
+        EmbeddingModel embeddingModel = mock(EmbeddingModel.class);
+        SimpleMeterRegistry meterRegistry = new SimpleMeterRegistry();
+        AiMetrics metrics = new AiMetrics(meterRegistry);
+        AtomicReference<String> threadName = new AtomicReference<>();
+        AtomicReference<Boolean> wasVirtual = new AtomicReference<>();
+        UUID docId = UUID.randomUUID();
+
+        when(repository.isPgVectorAvailable()).thenReturn(true);
+        when(embeddingModel.embed("Howard Marks")).thenAnswer(invocation -> {
+            threadName.set(Thread.currentThread().getName());
+            wasVirtual.set(Thread.currentThread().isVirtual());
+            return new float[] {0.8f, 0.2f};
+        });
+        when(repository.searchByVector(any(float[].class), anyDouble(), anyInt())).thenReturn(List.of(
+            new RagChunk.RagSearchHit(
+                docId, "霍华德·马克斯", "howard.md", "upload", 0, "周期",
+                "Howard Marks 强调市场情绪像钟摆一样在极度贪婪与极度恐惧之间摆动，控制下行风险远比追逐牛市收益更加重要。", 0.72
+            )
+        ));
+        when(repository.searchLexicalCandidates(anyString(), anyList(), anyInt())).thenReturn(List.of());
+
+        RagChunkRetriever retriever = new RagChunkRetriever(repository, embeddingModel, 0.45, metrics);
+        try {
+            List<RagChunk.RagSearchHit> first = retriever.search("Howard Marks", 3);
+            List<RagChunk.RagSearchHit> second = retriever.search("  howard   marks  ", 3);
+
+            assertEquals(1, first.size());
+            assertEquals(1, second.size());
+            verify(embeddingModel, times(1)).embed(anyString());
+            assertNotNull(threadName.get());
+            assertTrue(threadName.get().startsWith("rag-query-embed"));
+            assertFalse(Boolean.TRUE.equals(wasVirtual.get()));
+
+            assertEquals(1.0, meterRegistry.get("currency_analyzer_rag_embedding_total").tag("outcome", "miss").counter().count());
+            assertEquals(1.0, meterRegistry.get("currency_analyzer_rag_embedding_total").tag("outcome", "hit").counter().count());
+            assertEquals(2L, meterRegistry.get("currency_analyzer_rag_retrieval_seconds").tag("mode", "vector").timer().count());
+            assertEquals(2.0, meterRegistry.get("currency_analyzer_rag_hits").tag("mode", "vector").summary().totalAmount());
+
+            // Empty search triggers empty metric
+            when(embeddingModel.embed("no-match")).thenThrow(new IllegalStateException("onnx failed"));
+            assertTrue(retriever.search("no-match", 3).isEmpty());
+            assertEquals(1.0, meterRegistry.get("currency_analyzer_rag_embedding_total").tag("outcome", "error").counter().count());
+            assertEquals(1.0, meterRegistry.get("currency_analyzer_rag_empty_total").tag("mode", "empty").counter().count());
+        } finally {
+            retriever.shutdown();
+        }
     }
 }

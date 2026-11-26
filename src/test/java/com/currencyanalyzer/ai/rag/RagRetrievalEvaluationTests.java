@@ -38,7 +38,7 @@ class RagRetrievalEvaluationTests {
         JdbcTemplate jdbcTemplate = new JdbcTemplate(dataSource);
         try {
             RagDocumentRepository repository = new RagDocumentRepository(jdbcTemplate);
-            TextDocumentParser parser = new TextDocumentParser(520, 80, 500);
+            TextDocumentParser parser = new TextDocumentParser(155, 28, 500);
 
             seedDocument(repository, parser, "kelly-criterion.md", "凯利公式", """
                 # 凯利公式

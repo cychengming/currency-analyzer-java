@@ -30,18 +30,18 @@ public class TextDocumentParser implements DocumentParser {
         - LEAD_TOKEN_BUDGET
         - SEPARATOR_TOKEN_BUDGET;
 
-    private final int chunkMaxChars;
-    private final int chunkOverlapChars;
+    private final int chunkMaxTokens;
+    private final int chunkOverlapTokens;
     private final int maxChunksPerDocument;
 
     public TextDocumentParser(
-        @Value("${app.rag.chunk-max-chars:520}") int chunkMaxChars,
-        @Value("${app.rag.chunk-overlap-chars:80}") int chunkOverlapChars,
+        @Value("${app.rag.chunk-max-tokens:${app.rag.chunk-max-chars:155}}") int chunkMaxTokens,
+        @Value("${app.rag.chunk-overlap-tokens:${app.rag.chunk-overlap-chars:28}}") int chunkOverlapTokens,
         @Value("${app.rag.max-chunks-per-document:500}") int maxChunksPerDocument
     ) {
-        int requested = Math.max(1, chunkMaxChars);
-        this.chunkMaxChars = Math.min(requested, MAX_CHUNK_TOKENS);
-        this.chunkOverlapChars = Math.max(0, Math.min(chunkOverlapChars, this.chunkMaxChars / 2));
+        int requested = Math.max(1, chunkMaxTokens);
+        this.chunkMaxTokens = Math.min(requested, MAX_CHUNK_TOKENS);
+        this.chunkOverlapTokens = Math.max(0, Math.min(chunkOverlapTokens, this.chunkMaxTokens / 2));
         this.maxChunksPerDocument = Math.max(1, maxChunksPerDocument);
     }
 
@@ -160,7 +160,7 @@ public class TextDocumentParser implements DocumentParser {
         int currentRow = 0;
         for (String row : rows) {
             currentRow++;
-            if (estimateTokens(row) > chunkMaxChars) {
+            if (estimateTokens(row) > chunkMaxTokens) {
                 if (current.length() > header.length() && chunks.size() < maxChunksPerDocument) {
                     chunks.add(new ParsedChunk(chunks.size(), "Rows " + startRow + "-" + (currentRow - 1), current.toString()));
                 }
@@ -175,7 +175,7 @@ public class TextDocumentParser implements DocumentParser {
                 continue;
             }
             int nextTokens = estimateTokens(current.toString()) + 1 + estimateTokens(row);
-            if (current.length() > header.length() && nextTokens > chunkMaxChars) {
+            if (current.length() > header.length() && nextTokens > chunkMaxTokens) {
                 int endRow = currentRow - 1;
                 chunks.add(new ParsedChunk(
                     chunks.size(),
@@ -340,14 +340,14 @@ public class TextDocumentParser implements DocumentParser {
 
     private List<String> splitWithOverlap(String text) {
         String cleaned = text.strip();
-        if (estimateTokens(cleaned) <= chunkMaxChars) {
+        if (estimateTokens(cleaned) <= chunkMaxTokens) {
             return List.of(cleaned);
         }
         List<String> result = new ArrayList<>();
         int start = 0;
         int length = cleaned.length();
         while (start < length) {
-            int maxEnd = indexAtBudget(cleaned, start, chunkMaxChars);
+            int maxEnd = indexAtBudget(cleaned, start, chunkMaxTokens);
             int end = maxEnd;
             if (maxEnd < length) {
                 end = bestBreakPoint(cleaned, start, maxEnd);
@@ -359,7 +359,7 @@ public class TextDocumentParser implements DocumentParser {
             if (end >= length) {
                 break;
             }
-            int nextStart = rewindByBudget(cleaned, start, end, chunkOverlapChars);
+            int nextStart = rewindByBudget(cleaned, start, end, chunkOverlapTokens);
             if (nextStart < length && cleaned.charAt(nextStart) != '\n') {
                 int spaceAfter = cleaned.indexOf(' ', nextStart);
                 if (spaceAfter > nextStart && spaceAfter < end) {

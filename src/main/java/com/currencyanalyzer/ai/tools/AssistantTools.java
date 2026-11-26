@@ -388,18 +388,33 @@ public class AssistantTools {
         if (query.length() > 500) {
             query = query.substring(0, 500);
         }
+        List<KnowledgeNote> matched = knowledgeRetriever.retrieve(query, 4);
+        Set<String> alreadyAttached = ToolUserContext.attachedNoteIds();
+        List<KnowledgeNote> fresh = new ArrayList<>();
+        List<String> newlyAttachedPaths = new ArrayList<>();
         List<Map<String, Object>> notes = new ArrayList<>();
-        for (KnowledgeNote note : knowledgeRetriever.retrieve(query, 4)) {
+        for (KnowledgeNote note : matched) {
+            if (alreadyAttached.contains(note.path())) {
+                continue;
+            }
+            fresh.add(note);
+            newlyAttachedPaths.add(note.path());
             Map<String, Object> item = new LinkedHashMap<>();
             item.put("title", note.title());
             item.put("excerpt", note.excerpt(700));
             notes.add(item);
         }
+        ToolUserContext.recordAttachedNoteIds(newlyAttachedPaths);
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("count", notes.size());
         body.put("notes", notes);
         if (notes.isEmpty()) {
-            body.put("reason", "No matching note was found.");
+            if (matched.isEmpty()) {
+                body.put("reason", "No matching note was found.");
+            } else {
+                body.put("already_in_context", true);
+                body.put("reason", "Matching notes are already attached in the reference context above.");
+            }
         }
         return write(body);
     }

@@ -1,7 +1,11 @@
 package com.currencyanalyzer.ai.rag;
 
+import com.currencyanalyzer.ai.chat.AiMetrics;
 import com.currencyanalyzer.ai.knowledge.KnowledgeNote;
 import com.currencyanalyzer.ai.knowledge.KnowledgeRetriever;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
+import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.embedding.EmbeddingModel;
@@ -10,6 +14,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -20,6 +25,12 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 @Component
 public class RagChunkRetriever {
@@ -29,19 +40,42 @@ public class RagChunkRetriever {
     private static final int MIN_EXPANSION_CHARS = 45;
     private static final double STRONG_MATCH_THRESHOLD = 0.70;
     private static final double MAX_SCORE_GAP_BELOW_STRONG_TOP = 0.18;
+    private static final int QUERY_EMBEDDING_CONCURRENCY = 2;
+    private static final int QUERY_EMBED_TIMEOUT_SECONDS = 10;
+    private static final int QUERY_CACHE_MAX_SIZE = 1_000;
+    private static final Duration QUERY_CACHE_TTL = Duration.ofMinutes(10);
     static final int RRF_K = 60;
 
     private final RagDocumentRepository repository;
     private final EmbeddingModel embeddingModel;
     private final double similarityThreshold;
+    private final AiMetrics aiMetrics;
+    private final Cache<String, float[]> queryEmbeddingCache = Caffeine.newBuilder()
+        .maximumSize(QUERY_CACHE_MAX_SIZE)
+        .expireAfterWrite(QUERY_CACHE_TTL)
+        .build();
+    private final ExecutorService queryEmbeddingExecutor = Executors.newFixedThreadPool(
+        QUERY_EMBEDDING_CONCURRENCY,
+        runnable -> {
+            Thread thread = new Thread(runnable, "rag-query-embed");
+            thread.setDaemon(true);
+            return thread;
+        }
+    );
 
     @Autowired
     public RagChunkRetriever(
         RagDocumentRepository repository,
         ObjectProvider<EmbeddingModel> embeddingModelProvider,
+        ObjectProvider<AiMetrics> aiMetricsProvider,
         @Value("${app.rag.similarity-threshold:0.45}") double similarityThreshold
     ) {
-        this(repository, embeddingModelProvider.getIfAvailable(), similarityThreshold);
+        this(
+            repository,
+            embeddingModelProvider.getIfAvailable(),
+            similarityThreshold,
+            aiMetricsProvider.getIfAvailable(AiMetrics::noop)
+        );
     }
 
     RagChunkRetriever(
@@ -49,15 +83,26 @@ public class RagChunkRetriever {
         EmbeddingModel embeddingModel,
         double similarityThreshold
     ) {
+        this(repository, embeddingModel, similarityThreshold, AiMetrics.noop());
+    }
+
+    RagChunkRetriever(
+        RagDocumentRepository repository,
+        EmbeddingModel embeddingModel,
+        double similarityThreshold,
+        AiMetrics aiMetrics
+    ) {
         this.repository = repository;
         this.embeddingModel = embeddingModel;
         this.similarityThreshold = similarityThreshold;
+        this.aiMetrics = aiMetrics == null ? AiMetrics.noop() : aiMetrics;
     }
 
     public List<RagChunk.RagSearchHit> search(String query, int limit) {
         if (query == null || query.isBlank() || limit < 1) {
             return List.of();
         }
+        long startedAt = System.nanoTime();
         String trimmed = query.strip();
         int candidateLimit = Math.max(limit * 4, 24);
 
@@ -65,19 +110,28 @@ public class RagChunkRetriever {
         List<RagChunk.RagSearchHit> lexicalHits = lexicalSearch(trimmed, candidateLimit);
 
         List<RagChunk.RagSearchHit> fused;
-        if (vectorHits.isEmpty()) {
+        String mode;
+        if (vectorHits.isEmpty() && lexicalHits.isEmpty()) {
+            fused = List.of();
+            mode = "empty";
+        } else if (vectorHits.isEmpty()) {
             fused = lexicalHits;
+            mode = "lexical";
         } else if (lexicalHits.isEmpty()) {
             fused = vectorHits.stream()
                 .map(hit -> withScore(hit, adjustHitScore(hit.documentTitle(), hit.filename(), hit.content(), hit.score())))
                 .sorted(hitComparator())
                 .toList();
+            mode = "vector";
         } else {
             fused = fuseWithRrf(vectorHits, lexicalHits);
+            mode = "hybrid";
         }
 
         List<RagChunk.RagSearchHit> expanded = expandStrongDocuments(fused, limit);
-        return filterAndLimit(expanded, limit);
+        List<RagChunk.RagSearchHit> results = filterAndLimit(expanded, limit);
+        aiMetrics.recordRagRetrieval(mode, results.size(), System.nanoTime() - startedAt);
+        return results;
     }
 
     public List<KnowledgeNote> retrieveAsNotes(String query, int maxNotes) {
@@ -94,13 +148,60 @@ public class RagChunkRetriever {
         if (embeddingModel == null || !repository.isPgVectorAvailable()) {
             return List.of();
         }
+        float[] queryVector = embedQuery(query);
+        if (queryVector == null || queryVector.length == 0) {
+            return List.of();
+        }
         try {
-            float[] queryVector = embeddingModel.embed(query);
             return repository.searchByVector(queryVector, similarityThreshold, limit);
         } catch (RuntimeException exception) {
             log.warn("Vector retrieval unavailable; falling back to keyword search ({})", exception.getMessage());
             return List.of();
         }
+    }
+
+    private float[] embedQuery(String query) {
+        long startedAt = System.nanoTime();
+        String cacheKey = query.toLowerCase(Locale.ROOT).replaceAll("\\s+", " ").trim();
+        float[] cached = queryEmbeddingCache.getIfPresent(cacheKey);
+        if (cached != null) {
+            aiMetrics.recordRagEmbedding("hit", System.nanoTime() - startedAt);
+            return cached;
+        }
+        Future<float[]> future = null;
+        try {
+            future = queryEmbeddingExecutor.submit(() -> embeddingModel.embed(query));
+            float[] vector = future.get(QUERY_EMBED_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+            if (vector == null || vector.length == 0) {
+                aiMetrics.recordRagEmbedding("error", System.nanoTime() - startedAt);
+                return null;
+            }
+            queryEmbeddingCache.put(cacheKey, vector);
+            aiMetrics.recordRagEmbedding("miss", System.nanoTime() - startedAt);
+            return vector;
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            if (future != null) {
+                future.cancel(true);
+            }
+            aiMetrics.recordRagEmbedding("error", System.nanoTime() - startedAt);
+            return null;
+        } catch (TimeoutException | ExecutionException | RuntimeException exception) {
+            if (future != null) {
+                future.cancel(true);
+            }
+            String reason = exception instanceof ExecutionException && exception.getCause() != null
+                ? exception.getCause().getMessage()
+                : exception.getMessage();
+            log.warn("Query embedding failed; falling back to keyword search ({})", reason);
+            aiMetrics.recordRagEmbedding("error", System.nanoTime() - startedAt);
+            return null;
+        }
+    }
+
+    @PreDestroy
+    void shutdown() {
+        queryEmbeddingExecutor.shutdownNow();
     }
 
     /**
