@@ -94,9 +94,6 @@ public final class AccountStatusFilter extends OncePerRequestFilter {
     }
 
     private static boolean authoritiesMatch(Authentication authentication, UserRole expectedRole) {
-        if (authentication.getAuthorities() == null) {
-            return false;
-        }
         Set<String> current = authentication.getAuthorities().stream()
             .map(GrantedAuthority::getAuthority)
             .collect(Collectors.toSet());
