@@ -16,7 +16,7 @@ public final class LazyTransformersEmbeddingModel implements EmbeddingModel {
 
     private final TransformersEmbeddingModel delegate = new TransformersEmbeddingModel();
     private final Object lock = new Object();
-    private boolean ready;
+    private volatile boolean ready;
 
     public LazyTransformersEmbeddingModel(String modelUri, String tokenizerUri, String cacheDirectory) {
         delegate.setModelResource(modelUri);

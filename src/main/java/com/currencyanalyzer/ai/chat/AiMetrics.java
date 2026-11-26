@@ -1,6 +1,7 @@
 package com.currencyanalyzer.ai.chat;
 
 import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.DistributionSummary;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
@@ -121,6 +122,36 @@ public class AiMetrics {
             .tag("reason", sanitizeTag(reason, "unknown"))
             .register(registry)
             .increment();
+    }
+
+    public void recordRagRetrieval(String mode, int hitCount, long durationNanos) {
+        String safeMode = sanitizeTag(mode, "unknown");
+        Timer.builder("currency_analyzer_rag_retrieval_seconds")
+            .tag("mode", safeMode)
+            .register(registry)
+            .record(Math.max(0L, durationNanos), TimeUnit.NANOSECONDS);
+        DistributionSummary.builder("currency_analyzer_rag_hits")
+            .tag("mode", safeMode)
+            .register(registry)
+            .record(Math.max(0, hitCount));
+        if (hitCount <= 0 && !"skipped".equals(safeMode)) {
+            Counter.builder("currency_analyzer_rag_empty_total")
+                .tag("mode", safeMode)
+                .register(registry)
+                .increment();
+        }
+    }
+
+    public void recordRagEmbedding(String outcome, long durationNanos) {
+        String safeOutcome = sanitizeTag(outcome, "unknown");
+        Counter.builder("currency_analyzer_rag_embedding_total")
+            .tag(TAG_OUTCOME, safeOutcome)
+            .register(registry)
+            .increment();
+        Timer.builder("currency_analyzer_rag_embedding_seconds")
+            .tag(TAG_OUTCOME, safeOutcome)
+            .register(registry)
+            .record(Math.max(0L, durationNanos), TimeUnit.NANOSECONDS);
     }
 
     private static String sanitizeTag(String value, String fallback) {

@@ -1,7 +1,9 @@
 package com.currencyanalyzer.ai.chat;
 
 import com.currencyanalyzer.ai.knowledge.AssistantPrompt;
+import com.currencyanalyzer.ai.knowledge.KnowledgeNote;
 import com.currencyanalyzer.ai.knowledge.KnowledgeRetriever;
+import com.currencyanalyzer.ai.knowledge.RetrievalIntentGate;
 import com.currencyanalyzer.ai.knowledge.RetrievalQueryRewriter;
 import com.currencyanalyzer.ai.provider.AiProvider;
 import com.currencyanalyzer.ai.provider.AiProvider.Completion;
@@ -590,10 +592,19 @@ public class AiConversationService {
         if (query.isBlank()) {
             return "";
         }
-        return AssistantPrompt.referenceContext(
-            knowledgeRetriever.retrieve(query, knowledgeMaxNotes),
-            knowledgeMaxChars
-        );
+        String latestUser = latestUserContent(history);
+        if (!RetrievalIntentGate.shouldPreRetrieve(latestUser, query)) {
+            metrics.recordRagRetrieval("skipped", 0, 0L);
+            return "";
+        }
+        List<KnowledgeNote> notes = knowledgeRetriever.retrieve(query, knowledgeMaxNotes);
+        ToolUserContext.recordAttachedNoteIds(notes.stream().map(KnowledgeNote::path).toList());
+        return AssistantPrompt.referenceContext(notes, knowledgeMaxChars);
+    }
+
+    private static String latestUserContent(List<AiConversationRepository.AiProviderMessage> history) {
+        int index = lastUserIndex(history);
+        return index >= 0 ? history.get(index).content() : null;
     }
 
     private static List<Turn> promptWithContext(

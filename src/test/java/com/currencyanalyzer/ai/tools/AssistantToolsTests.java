@@ -1,5 +1,6 @@
 package com.currencyanalyzer.ai.tools;
 
+import com.currencyanalyzer.ai.knowledge.KnowledgeLibrary;
 import com.currencyanalyzer.ai.knowledge.KnowledgeNote;
 import com.currencyanalyzer.ai.knowledge.KnowledgeRetriever;
 import com.currencyanalyzer.alerts.UserAlertRuleRepository;
@@ -259,6 +260,35 @@ class AssistantToolsTests {
             .contains("No matching note"));
         assertTrue(tools.execute("search_notes", "{\"query\":\"kelly\"}").contains("unavailable"));
         assertTrue(tools.execute(null, null).contains("Unknown tool"));
+    }
+
+    @Test
+    void searchNotesDeduplicatesNotesAlreadyAttachedInTurnContext() {
+        ToolUserContext.clear();
+        try {
+            KnowledgeLibrary library = new KnowledgeLibrary(List.of(
+                new KnowledgeNote("upload/kelly.md#chunk-0", "Kelly Criterion", "Optimal fraction formula."),
+                new KnowledgeNote("upload/risk.md#chunk-0", "Position Sizing", "Cap single-trade risk at 1%.")
+            ));
+            AssistantTools tools = tools(
+                mock(MarketDataService.class),
+                mock(JdbcTemplate.class),
+                new KnowledgeRetriever(library)
+            );
+
+            ToolUserContext.recordAttachedNoteIds(List.of("upload/kelly.md#chunk-0"));
+            String dupOnly = tools.execute("search_notes", "{\"query\":\"kelly criterion\"}");
+            assertTrue(dupOnly.contains("\"count\":0"));
+            assertTrue(dupOnly.contains("\"already_in_context\":true"));
+
+            String freshResult = tools.execute("search_notes", "{\"query\":\"position sizing\"}");
+            assertTrue(freshResult.contains("\"count\":1"));
+            assertTrue(freshResult.contains("Position Sizing"));
+            assertTrue(ToolUserContext.attachedNoteIds().contains("upload/risk.md#chunk-0"));
+        } finally {
+            ToolUserContext.clear();
+        }
+        assertTrue(ToolUserContext.attachedNoteIds().isEmpty());
     }
 
     private static AssistantTools tools(

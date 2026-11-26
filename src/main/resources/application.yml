@@ -109,8 +109,8 @@ app:
     sync-on-startup: ${RAG_SYNC_ON_STARTUP:true}
     admin-users: ${RAG_ADMIN_USERS:}
     max-file-size-bytes: ${RAG_MAX_FILE_SIZE_BYTES:5242880}
-    chunk-max-chars: ${RAG_CHUNK_MAX_CHARS:155}
-    chunk-overlap-chars: ${RAG_CHUNK_OVERLAP_CHARS:80}
+    chunk-max-tokens: ${RAG_CHUNK_MAX_TOKENS:${RAG_CHUNK_MAX_CHARS:155}}
+    chunk-overlap-tokens: ${RAG_CHUNK_OVERLAP_TOKENS:${RAG_CHUNK_OVERLAP_CHARS:28}}
     max-chunks-per-document: ${RAG_MAX_CHUNKS_PER_DOC:500}
     similarity-threshold: ${RAG_SIMILARITY_THRESHOLD:0.45}
   pubsub:
