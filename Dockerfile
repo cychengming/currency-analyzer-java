@@ -50,10 +50,10 @@ COPY --from=build /workspace/target/currency-analyzer-java-*.jar /app/app.jar
 COPY --from=model-fetch /models/embeddings /app/models/embeddings
 RUN chown -R currency:currency /app
 USER currency
-# Cloud Run is pinned to 1 GiB. 45% of that limit is about 460 MiB of Java heap,
-# which leaves the rest for the quantized MiniLM ONNX session, Metaspace, and
-# glibc. 55% was sized for a 2 GiB limit (about 900 MiB outside the heap).
+# Cloud Run runs on 2 vCPU / 2 GiB. 50% max heap (~1024 MiB) leaves ~1 GiB
+# outside the Java heap for the quantized MiniLM ONNX Runtime session, Metaspace,
+# Reactor Netty direct buffers, and glibc arenas.
 ENV MALLOC_ARENA_MAX=2
 ENV PORT=8080
 EXPOSE 8080
-ENTRYPOINT ["java", "-XX:MaxRAMPercentage=40.0", "-XX:MaxMetaspaceSize=160m", "-XX:ReservedCodeCacheSize=96m", "-Xss512k", "-XX:+ExitOnOutOfMemoryError", "-Djava.security.egd=file:/dev/./urandom", "-jar", "/app/app.jar"]
+ENTRYPOINT ["java", "-XX:MaxRAMPercentage=50.0", "-XX:MaxMetaspaceSize=256m", "-XX:ReservedCodeCacheSize=128m", "-Xss512k", "-XX:+ExitOnOutOfMemoryError", "-Djava.security.egd=file:/dev/./urandom", "-jar", "/app/app.jar"]
