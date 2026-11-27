@@ -32,6 +32,11 @@ public class MasterPipelineConfiguration {
     }
 
     @Bean
+    RuleBacktestEngine ruleBacktestEngine() {
+        return new RuleBacktestEngine();
+    }
+
+    @Bean
     Map<String, MasterStrategyProfile> masterStrategyProfiles() {
         CarverAqrSignalEngine carver = new CarverAqrSignalEngine();
         DonchianBreakoutSignalEngine donchian = new DonchianBreakoutSignalEngine();

@@ -69,8 +69,8 @@ function switchPage(page, evt) {
     navTabs.forEach(tab => tab.classList.remove('active'));
     pages.forEach(p => p.classList.remove('active'));
 
-    const labPages = new Set(['backtest', 'forecast', 'deepLearning']);
-    const navMatchPage = labPages.has(targetPage) ? 'backtest' : targetPage;
+    const labPages = new Set(['masterPipeline', 'backtest', 'forecast', 'deepLearning']);
+    const navMatchPage = labPages.has(targetPage) ? 'masterPipeline' : targetPage;
 
     const e = evt || window.event;
     const clickedTab = e && e.target && e.target.closest ? e.target.closest('.nav-tab') : null;

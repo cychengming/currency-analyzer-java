@@ -130,8 +130,8 @@ flowchart TB
 | Milestone | Scope | Status |
 |---|---|---|
 | **Milestone 1** | Store 2 (`V10` OHLC & Policy-Rate SQL + Post-Close `IncrementalOhlcSyncService`), 5-Stage Pure-Java Master Pipeline (`CarverAqrSignalEngine` + Master Arena modules), Two-Store RAG Split (`.csv` removed, Strategy Card + 4 Scenario SOPs), `distill-master-module` skill | **Completed** ([PR #23](https://github.com/cychengming/currency-analyzer-java/pull/23)) |
-| **Milestone 2** | Strategy Lab 5-Stage Trace & Attribution APIs/UI, Paper Trade (`trade_journal`) & Daily Risk Engine, Live Master Target Sheet | **Next** |
-| **Milestone 3** | Deterministic Discretionary-vs-Master Skills (`/pre-trade-check`, `/morning-brief`, `/journal-review`), Behavioral Alpha Audit, Human-in-the-Loop Tool Confirmation | Planned |
+| **Milestone 2** | Strategy Lab 5-Stage Trace & Attribution APIs/UI, Paper Trade (`trade_journal`) & Daily Risk Engine, Live Master Target Sheet | **Completed** |
+| **Milestone 3** | Deterministic Discretionary-vs-Master Skills (`/pre-trade-check`, `/morning-brief`, `/journal-review`), Behavioral Alpha Audit, Human-in-the-Loop Tool Confirmation | **Next** |
 | **Milestone 4** | Authenticated Spring AI `/mcp` Server (`user_api_tokens` Bearer chain) for Automated Master Arena Research | Planned |
 
 Related Detailed Specs:

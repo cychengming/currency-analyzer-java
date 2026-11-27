@@ -81,6 +81,40 @@ function _formatSignedUsd(value) {
     return `${num >= 0 ? '+' : '-'}$${Math.abs(num).toFixed(2)}`;
 }
 
+async function _fetchTradeJson(endpoint, options = {}) {
+    try {
+        const method = (options.method || 'GET').toUpperCase();
+        const headers = {
+            'Content-Type': 'application/json',
+            ...(options.headers || {})
+        };
+        if (!['GET', 'HEAD', 'OPTIONS'].includes(method) && typeof getCsrfToken === 'function') {
+            const csrfToken = await getCsrfToken();
+            if (csrfToken) {
+                headers['X-XSRF-TOKEN'] = csrfToken;
+            }
+        }
+        const response = await fetch(`${API_BASE}${endpoint}`, {
+            ...options,
+            headers,
+            credentials: 'include'
+        });
+        if (response.status === 401) {
+            if (window.location.pathname !== '/login.html') {
+                window.location.href = '/login.html';
+            }
+            return null;
+        }
+        const contentType = response.headers.get('content-type') || '';
+        if (contentType.includes('application/json')) {
+            return await response.json();
+        }
+        return response.ok ? { success: true } : { success: false, error: `Request failed (${response.status})` };
+    } catch (error) {
+        return { success: false, error: error?.message || 'Request failed' };
+    }
+}
+
 function _currentTradePlannedRisk() {
     const backdrop = document.getElementById('tradeDiaryModalBackdrop');
     if (!backdrop || backdrop.style.display === 'none') return 0;
@@ -299,8 +333,8 @@ async function refreshTradeRiskSummary() {
 }
 
 async function loadTradeRiskSettings() {
-    const settings = await fetchAPI('/api/settings');
-    if (!settings) return;
+    const settings = await _fetchTradeJson('/api/trade/settings');
+    if (!settings || !settings.success) return;
     const el = document.getElementById('tradeDailyRiskLimitPct');
     if (el && settings.daily_risk_limit_pct !== undefined) {
         el.value = settings.daily_risk_limit_pct;
@@ -314,14 +348,16 @@ async function saveTradeRiskLimit() {
         return;
     }
 
-    const result = await fetchAPI('/api/settings', {
-        method: 'POST',
+    const result = await _fetchTradeJson('/api/trade/settings', {
+        method: 'PUT',
         body: JSON.stringify({ daily_risk_limit_pct: dailyRiskLimitPct })
     });
 
     if (result && result.success) {
-        _setTradeDiaryStatus('Daily risk limit saved.');
+        _setTradeDiaryStatus('Personal daily risk limit saved.');
         await refreshTradeRiskSummary();
+    } else {
+        _setTradeDiaryStatus(result?.error || 'Failed to save daily risk limit.', true);
     }
 }
 
@@ -447,8 +483,18 @@ async function initTradePage() {
             for (const id of refreshFields) {
                 const el = document.getElementById(id);
                 if (el) {
-                    el.addEventListener('change', () => { refreshTradeRiskSummary(); });
-                    el.addEventListener('input', () => { refreshTradeRiskSummary(); });
+                    el.addEventListener('change', () => {
+                        refreshTradeRiskSummary();
+                        if (id === 'tradeEquity' && typeof scheduleLiveMasterTargetsRefresh === 'function') {
+                            scheduleLiveMasterTargetsRefresh();
+                        }
+                    });
+                    el.addEventListener('input', () => {
+                        refreshTradeRiskSummary();
+                        if (id === 'tradeEquity' && typeof scheduleLiveMasterTargetsRefresh === 'function') {
+                            scheduleLiveMasterTargetsRefresh();
+                        }
+                    });
                 }
             }
 
@@ -472,6 +518,9 @@ async function initTradePage() {
             await loadTradeRiskSettings();
             await refreshTradeRiskSummary();
             await loadTradeDiary();
+            if (typeof loadLiveMasterTargets === 'function') {
+                await loadLiveMasterTargets();
+            }
         }
     } catch (_) {
         // ignore
@@ -496,7 +545,7 @@ async function loadTradeMetrics() {
     _setTradeMetricsVisible(false);
     _setTradeStatus(`Loading OHLC for ${pair} (${days}d)...`);
 
-    const endpoint = `/api/historical-ohlc/${encodeURIComponent(pair)}/${days}`;
+    const endpoint = `/api/historical-ohlc?pair=${encodeURIComponent(pair)}&days=${days}`;
     const data = await fetchAPI(endpoint);
 
     if (!data) {
@@ -641,12 +690,13 @@ async function loadTradeDiary() {
         const statusColor = isOpen ? '#86efac' : '#94a3b8';
         const pnl = entry.realized_pnl == null ? '' : `<div style="font-size: 12px; color: ${entry.realized_pnl >= 0 ? '#86efac' : '#fca5a5'};">Realized P/L: ${_formatSignedUsd(entry.realized_pnl)}</div>`;
         const closeReason = entry.close_reason ? `<div style="margin-top: 10px; color:#cbd5e1; font-size: 13px; white-space: pre-wrap;"><strong>Exit:</strong> ${_escapeHtml(entry.close_reason)}</div>` : '';
-        const actions = `
+        const canWrite = window.currentUser?.canWrite !== false;
+        const actions = canWrite ? `
             <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top: 12px;">
                 <button class="btn-secondary" style="width:auto;" onclick="openTradeDiaryModal('edit', ${entry.id})">Edit</button>
                 ${isOpen ? `<button class="btn-danger" style="width:auto;" onclick="openTradeDiaryModal('close', ${entry.id})">Close</button>` : ''}
             </div>
-        `;
+        ` : '';
 
         return `
             <div class="alert-item" style="display:block; background:#0f172a; border-left: 4px solid ${statusColor}; margin-bottom: 12px;">
@@ -656,8 +706,8 @@ async function loadTradeDiary() {
                         <div style="font-size:12px; color:${statusColor}; margin-top:4px;">${_escapeHtml(String(entry.status || '').toUpperCase())}</div>
                     </div>
                     <div style="text-align:right; font-size:12px; color:#94a3b8;">
-                        <div>${entry.opened_at ? new Date(entry.opened_at).toLocaleString() : '—'}</div>
-                        ${entry.closed_at ? `<div>Closed: ${new Date(entry.closed_at).toLocaleString()}</div>` : ''}
+                        <div>${entry.opened_at ? new Date(entry.opened_at).toLocaleString('en-US') : '—'}</div>
+                        ${entry.closed_at ? `<div>Closed: ${new Date(entry.closed_at).toLocaleString('en-US')}</div>` : ''}
                     </div>
                 </div>
 
@@ -698,7 +748,7 @@ async function logTradeEntry() {
         sigma: _tradeLast.sigma,
     };
 
-    const result = await fetchAPI('/api/trade/diary', {
+    const result = await _fetchTradeJson('/api/trade/diary', {
         method: 'POST',
         body: JSON.stringify(payload)
     });
@@ -720,6 +770,7 @@ async function logTradeEntry() {
         await refreshTradeRiskSummary();
     }
     await loadTradeDiary();
+    if (typeof loadLiveMasterTargets === 'function') await loadLiveMasterTargets();
 }
 
 async function saveTradeDiaryEdit() {
@@ -739,7 +790,7 @@ async function saveTradeDiaryEdit() {
         sigma: _tradeLast.sigma,
     };
 
-    const result = await fetchAPI(`/api/trade/diary/${tradeId}`, {
+    const result = await _fetchTradeJson(`/api/trade/diary/${tradeId}`, {
         method: 'PUT',
         body: JSON.stringify(payload)
     });
@@ -761,6 +812,7 @@ async function saveTradeDiaryEdit() {
         await refreshTradeRiskSummary();
     }
     await loadTradeDiary();
+    if (typeof loadLiveMasterTargets === 'function') await loadLiveMasterTargets();
 }
 
 async function closeTradeEntry(tradeId) {
@@ -773,7 +825,7 @@ async function closeTradeEntry(tradeId) {
         return;
     }
 
-    const result = await fetchAPI(`/api/trade/diary/${tradeId}/close`, {
+    const result = await _fetchTradeJson(`/api/trade/diary/${tradeId}/close`, {
         method: 'POST',
         body: JSON.stringify({ close_reason: closeReason, close_price: closePrice, equity })
     });
@@ -792,6 +844,7 @@ async function closeTradeEntry(tradeId) {
         await refreshTradeRiskSummary();
     }
     await loadTradeDiary();
+    if (typeof loadLiveMasterTargets === 'function') await loadLiveMasterTargets();
 }
 
 async function saveTradeDiaryModal() {

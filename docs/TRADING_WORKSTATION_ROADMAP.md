@@ -1,7 +1,7 @@
 # Currency Analyzer Java — "Master-as-Code" 5-Stage Trading Workstation Roadmap
 
 **Date:** 2026-11-26 (Updated 2026-11-27)  
-**Status:** Milestone 1 Implemented ([PR #23](https://github.com/cychengming/currency-analyzer-java/pull/23)); Milestone 2 Next — see [SYSTEM_ARCHITECTURE_AND_DECISIONS.md](SYSTEM_ARCHITECTURE_AND_DECISIONS.md) for the consolidated Architecture Summary & ADR Log  
+**Status:** Milestones 1 & 2 Implemented; Milestone 3 Next — see [SYSTEM_ARCHITECTURE_AND_DECISIONS.md](SYSTEM_ARCHITECTURE_AND_DECISIONS.md) for the consolidated Architecture Summary & ADR Log  
 **Target Stack:** Java 25, Spring Boot 4.1.2, Spring AI 2.0.2, `ta4j-core` 0.29.0, `hipparchus-stat` 4.0.3, PostgreSQL + `pgvector` / `pg_trgm`, Cloud Run + GCS + Pub/Sub
 
 ---
@@ -98,7 +98,7 @@ Every candidate must pass the 4-step workflow codified in [SKILL.md](file:///c:/
   - `SignalEngine`, `VolatilityTargetRiskSizer`, `RegimeRiskOverlay`, `ExecutionAndCarrySimulator`, `PortfolioLedger`, and `FxMasterPipelineRunner` powered by `ta4j-core` and `hipparchus-stat`.
   - Canonical `CarverAqrSignalEngine` plus Master Arena candidates (`DonchianBreakoutSignalEngine`, `DruckenmillerRateImpulseSignalEngine`, `DrawdownAndVolSpikeOverlay`) wired via `MasterPipelineConfiguration`.
 
-### Milestone 2 — Strategy Lab 5-Stage Inspector, Paper Trade & Live Master Target Sheet *(Next)*
+### Milestone 2 — Strategy Lab 5-Stage Inspector, Paper Trade & Live Master Target Sheet *(Implemented)*
 
 - **Market & Backtest APIs:**
   - Implement `GET /api/historical-ohlc/{*legacyPath}` (and query variant) matching `static/pages/trade.js` and `static/dashboard.js`.

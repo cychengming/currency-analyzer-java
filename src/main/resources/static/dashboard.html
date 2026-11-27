@@ -6,7 +6,7 @@
     <title>Currency Market Analyzer - Dashboard</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.9.1/chart.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chartjs-chart-financial@0.2.1/dist/chartjs-chart-financial.min.js"></script>
-    <link rel="stylesheet" href="/static/styles.css?v=20261126-rbac1">
+    <link rel="stylesheet" href="/static/styles.css?v=20261127-m2">
 </head>
 <body class="app-shell-body">
     <div class="dashboard app-shell" id="dashboard">
@@ -31,7 +31,7 @@
                         <span class="app-nav-text">Alerts</span>
                         <span class="app-nav-pill app-nav-pill-warn" id="navAlertsUnreadBadge" hidden>0</span>
                     </button>
-                    <button class="nav-tab app-nav-item" data-page="backtest" data-nav-group="lab" onclick="switchPage('backtest', event)">
+                    <button class="nav-tab app-nav-item" data-page="masterPipeline" data-nav-group="lab" onclick="switchPage('masterPipeline', event)">
                         <span class="app-nav-text">Strategy &amp; AI Lab</span>
                     </button>
                     <button class="nav-tab app-nav-item" data-page="trade" onclick="switchPage('trade', event); initTradePage();">
@@ -98,11 +98,12 @@
                 </div>
             </header>
 
-            <!-- Strategy & AI Lab Sub-Navigation Bar (visible only on Backtest / Forecast / Deep Learning) -->
+            <!-- Strategy & AI Lab Sub-Navigation Bar (visible on Master Pipeline / Backtest / Forecast / Deep Learning) -->
             <div class="app-lab-subnav" id="labSubnav" hidden>
                 <div class="app-lab-subnav-title">Strategy &amp; AI Lab</div>
                 <div class="app-lab-subnav-tabs">
-                    <button type="button" class="app-subtab" data-lab-page="backtest" onclick="switchPage('backtest')">Backtest</button>
+                    <button type="button" class="app-subtab" data-lab-page="masterPipeline" onclick="switchPage('masterPipeline')">5-Stage Master Arena</button>
+                    <button type="button" class="app-subtab" data-lab-page="backtest" onclick="switchPage('backtest')">Rule Backtest</button>
                     <button type="button" class="app-subtab" data-lab-page="forecast" onclick="switchPage('forecast'); if (typeof loadLatestForecast === 'function') loadLatestForecast();">Forecast</button>
                     <button type="button" class="app-subtab" data-lab-page="deepLearning" onclick="switchPage('deepLearning')">Deep Learning</button>
                 </div>
@@ -265,14 +266,15 @@
 
     <div class="toast" id="toast"></div>
 
-    <script src="/static/utils.js?v=20261125-shell2"></script>
+    <script src="/static/utils.js?v=20261127-m2"></script>
     <script src="/static/auth.js?v=20261126-rbac1"></script>
-    <script src="/static/dashboard.js?v=20261126-rbac1"></script>
+    <script src="/static/dashboard.js?v=20261127-m2"></script>
     <script src="/static/pages/markets_alerts.js?v=20261125-shell2"></script>
     <script src="/static/pages/overview.js?v=20261113"></script>
     <script src="/static/pages/alerts.js?v=20261113"></script>
     <script src="/static/pages/manage.js?v=20261113"></script>
-    <script src="/static/pages/trade.js?v=20261113"></script>
+    <script src="/static/pages/master_pipeline.js?v=20261127-m2"></script>
+    <script src="/static/pages/trade.js?v=20261127-m2"></script>
     <script src="/static/pages/forecast.js?v=20261113"></script>
     <script src="/static/pages/deep_learning.js?v=20261113"></script>
     <script src="/static/pages/knowledge.js?v=20261123"></script>

@@ -34,10 +34,29 @@ public class MarketDataController {
 
     @GetMapping("/api/historical/{*legacyPath}")
     public List<HistoricalPoint> historicalLegacy(@PathVariable String legacyPath) {
+        PairDays parsed = parseLegacyPairDays(legacyPath, "Historical path must contain pair and days");
+        return marketDataService.fetchHistorical(parsed.pair(), parsed.days());
+    }
+
+    @GetMapping("/api/historical-ohlc")
+    public List<OhlcBar> historicalOhlc(
+        @RequestParam String pair,
+        @RequestParam int days
+    ) {
+        return marketDataService.fetchHistoricalOhlc(pair, days);
+    }
+
+    @GetMapping("/api/historical-ohlc/{*legacyPath}")
+    public List<OhlcBar> historicalOhlcLegacy(@PathVariable String legacyPath) {
+        PairDays parsed = parseLegacyPairDays(legacyPath, "Historical OHLC path must contain pair and days");
+        return marketDataService.fetchHistoricalOhlc(parsed.pair(), parsed.days());
+    }
+
+    private static PairDays parseLegacyPairDays(String legacyPath, String missingMessage) {
         String path = legacyPath.startsWith("/") ? legacyPath.substring(1) : legacyPath;
         int separator = path.lastIndexOf('/');
         if (separator <= 0 || separator == path.length() - 1) {
-            throw new IllegalArgumentException("Historical path must contain pair and days");
+            throw new IllegalArgumentException(missingMessage);
         }
 
         String pair = URLDecoder.decode(path.substring(0, separator), StandardCharsets.UTF_8);
@@ -47,6 +66,9 @@ public class MarketDataController {
         } catch (NumberFormatException exception) {
             throw new IllegalArgumentException("days must be a number");
         }
-        return marketDataService.fetchHistorical(pair, days);
+        return new PairDays(pair, days);
+    }
+
+    private record PairDays(String pair, int days) {
     }
 }
