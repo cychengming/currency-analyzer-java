@@ -1,7 +1,7 @@
 # Currency Analyzer Java — "Master-as-Code" 5-Stage Trading Workstation Roadmap
 
-**Date:** 2026-11-26  
-**Status:** Approved "Master-as-Code" Architecture & Sequenced Roadmap (Pending Implementation)  
+**Date:** 2026-11-26 (Updated 2026-11-27)  
+**Status:** Milestone 1 Implemented ([PR #23](https://github.com/cychengming/currency-analyzer-java/pull/23)); Milestone 2 Next — see [SYSTEM_ARCHITECTURE_AND_DECISIONS.md](SYSTEM_ARCHITECTURE_AND_DECISIONS.md) for the consolidated Architecture Summary & ADR Log  
 **Target Stack:** Java 25, Spring Boot 4.1.2, Spring AI 2.0.2, `ta4j-core` 0.29.0, `hipparchus-stat` 4.0.3, PostgreSQL + `pgvector` / `pg_trgm`, Cloud Run + GCS + Pub/Sub
 
 ---
@@ -83,20 +83,20 @@ Every candidate must pass the 4-step workflow codified in [SKILL.md](file:///c:/
 
 ## 4. Sequenced 4-Milestone Engineering Roadmap
 
-### Milestone 1 — 5-Stage Java Master Pipeline Core & Aligned Data Store *(Implemented)*
+### Milestone 1 — 5-Stage Java Master Pipeline Core & Aligned Data Store *(Implemented on PR #23)*
 
 - **Flyway Schema (`src/main/resources/db/migration/V10__ohlc_and_policy_rate_store.sql`):**
   - Portable H2 + PostgreSQL DDL (strictly monotonic after `V9__user_roles_and_invites.sql`).
-  - `ohlc_history`: `(id, pair, date, open, high, low, close, volume, source, fetched_at)` with unique `(pair, date)`.
+  - `ohlc_history`: `(id, pair, bar_date, open, high, low, close, volume, source, fetched_at)` with unique `(pair, bar_date)`.
   - `policy_rate_history`: `(id, currency, effective_date, annual_rate_pct, source, fetched_at)` with unique `(currency, effective_date)`.
-  - `pipeline_backtest_runs`: `(id, username, profile_name, config_json, summary_json, created_at)` for persisting Master Arena runs.
-- **Deterministic Seed + Refreshers (`com.currencyanalyzer.marketdata`):**
-  - Bundle a deterministic G10 FX + `GOLD/USD` + `SILVER/USD` daily OHLC & FRED/BIS central-bank policy-rate CSV seed under `src/main/resources/marketdata/seed/` so offline dev and CI backtests require zero paid APIs.
-  - Add Yahoo/Stooq OHLC and FRED policy-rate adapters (with `Frankfurter` close fallback and proxy support).
+  - `pipeline_backtest_runs`: `(id, username, profile_id, start_date, end_date, config_json, summary_json, created_at)` for persisting Master Arena runs.
+- **Deterministic Policy-Rate Seed + Post-NY-Close Incremental OHLC Sync:**
+  - Bundled `src/main/resources/marketdata/seed/policy-rates.csv` (`2007–2026` G10 + `XAU`/`XAG`) + `PolicyRateResolver` point-in-time step-function lookup.
+  - `AlignedMarketDataRepository` + `IncrementalOhlcSyncService` (`0 15 17 * * MON-FRI` in `America/New_York` + lazy read-through `ensureSyncedAndEmitAlignedBars`) using `MarketDataService.fetchHistoricalOhlc(...)`.
 - **Pure-Java 5-Stage Engine (`com.currencyanalyzer.quant.pipeline`):**
-  - Implement immutable `FxDailyBar`, `PolicyRatePair`, `PortfolioState`, `Order`, `FillReport`, and `LedgerSnapshot` records.
-  - Implement `SignalEngine`, `PortfolioRiskSizer`, `RegimeRiskOverlay`, `ExecutionAndCarrySimulator`, and `PortfolioLedger` powered by `ta4j-core` and `hipparchus-stat`.
-  - Implement the canonical `CarverAqrBenchmarkSpine` plus 1–2 baseline plug-in modules (e.g., `DonchianBreakoutSignalEngine`, `DrawdownHeatOverlay`) and full unit + crisis-window JUnit tests.
+  - Immutable records (`InstrumentSpec`, `FxDailyBar`, `PortfolioState`, `TargetPosition`, `OrderDelta`, `FillReport`, `LedgerSnapshot`, `StageTrace`, `PipelineConfig`, `PipelineSummary`, `PipelineBacktestResult`, `MasterStrategyProfile`).
+  - `SignalEngine`, `VolatilityTargetRiskSizer`, `RegimeRiskOverlay`, `ExecutionAndCarrySimulator`, `PortfolioLedger`, and `FxMasterPipelineRunner` powered by `ta4j-core` and `hipparchus-stat`.
+  - Canonical `CarverAqrSignalEngine` plus Master Arena candidates (`DonchianBreakoutSignalEngine`, `DruckenmillerRateImpulseSignalEngine`, `DrawdownAndVolSpikeOverlay`) wired via `MasterPipelineConfiguration`.
 
 ### Milestone 2 — Strategy Lab 5-Stage Inspector, Paper Trade & Live Master Target Sheet *(Next)*
 
