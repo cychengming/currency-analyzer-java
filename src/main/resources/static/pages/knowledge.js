@@ -43,7 +43,7 @@ async function loadRagStorageInfo() {
     }
     if (maxHint && info.maxFileSizeBytes) {
         const mb = (info.maxFileSizeBytes / (1024 * 1024)).toFixed(1).replace(/\.0$/, '');
-        maxHint.textContent = `Max ${mb} MB (.md, .txt, .csv)`;
+        maxHint.textContent = `Max ${mb} MB (.md, .txt)`;
     }
     if (uploadBtn) uploadBtn.disabled = !ragCanManage;
     if (syncBtn) syncBtn.disabled = !ragCanManage;
@@ -383,7 +383,7 @@ async function uploadRagDocument() {
     const uploadBtn = document.getElementById('ragUploadBtn');
     const file = fileInput?.files?.[0];
     if (!file) {
-        setInlineBanner('knowledgeNotice', 'Select a .md, .txt, or .csv file first.', 'warning');
+        setInlineBanner('knowledgeNotice', 'Select a .md or .txt file first.', 'warning');
         return;
     }
 

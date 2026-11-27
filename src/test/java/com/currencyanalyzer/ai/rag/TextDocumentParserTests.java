@@ -3,7 +3,6 @@ package com.currencyanalyzer.ai.rag;
 import org.junit.jupiter.api.Test;
 
 import java.nio.charset.StandardCharsets;
-import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -66,22 +65,6 @@ class TextDocumentParserTests {
     }
 
     @Test
-    void repeatsCsvHeaderOnEveryChunk() {
-        StringBuilder csv = new StringBuilder("pair,bias,note\n");
-        for (int i = 1; i <= 25; i++) {
-            csv.append("PAIR").append(i).append("/USD,bullish,Long observation row number ").append(i).append("\n");
-        }
-
-        DocumentParser.ParsedDocument parsed = parser.parse("watchlist.csv", csv.toString().getBytes(StandardCharsets.UTF_8), null);
-
-        assertEquals("watchlist", parsed.title());
-        assertTrue(parsed.chunks().size() > 1);
-        for (DocumentParser.ParsedChunk chunk : parsed.chunks()) {
-            assertTrue(chunk.content().startsWith("pair,bias,note\n"), "Every CSV chunk should include the header row");
-        }
-    }
-
-    @Test
     void splitsLongPlainTextWithOverlap() {
         String text = ("Central bank divergence drives multi-month currency trends. ").repeat(12);
 
@@ -93,13 +76,17 @@ class TextDocumentParserTests {
     }
 
     @Test
-    void rejectsUnsupportedExtensionsAndBinaryPayloads() {
+    void rejectsUnsupportedExtensionsIncludingCsvAndBinaryPayloads() {
         assertFalse(parser.supports("report.pdf"));
+        assertFalse(parser.supports("prices.csv"));
         assertTrue(parser.supports("notes.MD"));
-        assertTrue(parser.supports("prices.csv"));
+        assertTrue(parser.supports("runbook.txt"));
 
         assertThrows(IllegalArgumentException.class, () ->
             parser.parse("report.pdf", "hello".getBytes(StandardCharsets.UTF_8), null)
+        );
+        assertThrows(IllegalArgumentException.class, () ->
+            parser.parse("prices.csv", "date,close\n2026-11-20,1.08\n".getBytes(StandardCharsets.UTF_8), null)
         );
         assertThrows(IllegalArgumentException.class, () ->
             parser.parse("bad.txt", new byte[] {(byte) 0xFF, (byte) 0xFE, 0x00, 0x01}, null)
@@ -113,7 +100,7 @@ class TextDocumentParserTests {
     }
 
     @Test
-    void handlesBomCodeFencesCsvHeaderOnlyAndBreakPoints() {
+    void handlesBomCodeFencesAndBreakPoints() {
         String mdWithBomAndFence = "\uFEFF# Top Guide\n\n```python\n# not a heading\nx = 1\n```\n\n"
             + "Paragraph one has enough detail to exceed the split limit cleanly.\n\n"
             + "Paragraph two also contains sentences. Second sentence here! Third sentence here?\n"
@@ -123,12 +110,7 @@ class TextDocumentParserTests {
         assertEquals("Top Guide", parsed.title());
         assertTrue(parsed.chunks().size() >= 3);
         assertEquals("text/markdown; charset=utf-8", parser.inferContentType("guide.markdown"));
-        assertEquals("text/csv; charset=utf-8", parser.inferContentType("data.csv"));
         assertEquals("text/plain; charset=utf-8", parser.inferContentType("notes.txt"));
-
-        DocumentParser.ParsedDocument headerOnlyCsv = parser.parse("empty_rows.csv", "pair,rate\n\n".getBytes(StandardCharsets.UTF_8), null);
-        assertEquals(1, headerOnlyCsv.chunks().size());
-        assertEquals("CSV Header", headerOnlyCsv.chunks().getFirst().heading());
 
         assertEquals("---\nunclosed front matter", TextDocumentParser.stripFrontMatter("---\nunclosed front matter"));
         assertEquals("", TextDocumentParser.stripFrontMatter("---\nk: v\n---"));
@@ -146,30 +128,6 @@ class TextDocumentParserTests {
             assertTrue(TextDocumentParser.weightedLength(chunk.content()) <= 520);
             assertTrue(chunk.content().length() <= 260);
         }
-    }
-
-    @Test
-    void parsesQuotedCommasAndMultilineCsvFields() {
-        String csv = """
-            name,note
-            "Howard Marks, Oaktree","He writes:
-            ""memos"" about risk"
-            plain,row
-            """;
-
-        List<String> records = TextDocumentParser.csvRecords(csv.replace("\r\n", "\n"));
-        assertTrue(records.stream().anyMatch(record ->
-            record.contains("Howard Marks, Oaktree") && record.contains("\n") && record.contains("memos")
-        ));
-
-        DocumentParser.ParsedDocument parsed = parser.parse("investors.csv", csv.getBytes(StandardCharsets.UTF_8), null);
-        String joined = parsed.chunks().stream()
-            .map(DocumentParser.ParsedChunk::content)
-            .reduce("", (left, right) -> left + "\n" + right);
-        assertTrue(joined.contains("Howard Marks, Oaktree"));
-        assertTrue(joined.contains("memos"));
-        assertTrue(joined.contains("plain,row"));
-        assertFalse(joined.contains("\"He writes:\nplain"));
     }
 
     @Test

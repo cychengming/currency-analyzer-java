@@ -394,6 +394,69 @@ class MarketDataServiceTests {
             .isEqualTo(new LiveRate(105.0, 0.0, 0.0));
     }
 
+    @Test
+    void historicalOhlcParsesAndSanitizesYahooBarsAndFallsBackToFrankfurter() {
+        long nov19 = Instant.parse("2026-11-19T00:00:00Z").getEpochSecond();
+        long nov20 = Instant.parse("2026-11-20T00:00:00Z").getEpochSecond();
+
+        RestClient.Builder builder = RestClient.builder();
+        MockRestServiceServer server = MockRestServiceServer.bindTo(builder).build();
+        server.expect(requestTo("https://query1.finance.yahoo.com/v8/finance/chart/GC%3DF?range=1mo&interval=1d"))
+            .andRespond(withSuccess("""
+                {
+                  "chart": {
+                    "result": [{
+                      "timestamp": [%d, %d],
+                      "indicators": {
+                        "quote": [{
+                          "open": [2600.0, null],
+                          "high": [2595.0, 2650.0],
+                          "low": [2615.0, 2610.0],
+                          "close": [2610.0, 2640.0],
+                          "volume": [1200.0, -5.0]
+                        }]
+                      }
+                    }]
+                  }
+                }
+                """.formatted(nov19, nov20), MediaType.APPLICATION_JSON));
+
+        MarketDataService service = new MarketDataService(
+            builder.build(),
+            FIXED_CLOCK,
+            List.of("GOLD/USD", "EUR/USD"),
+            new LiveRateCache(Duration.ofSeconds(60), Ticker.systemTicker())
+        );
+
+        List<OhlcBar> first = service.fetchHistoricalOhlc("GOLD/USD", 30);
+        assertThat(first).containsExactly(
+            new OhlcBar("2026-11-19", 2600.0, 2610.0, 2600.0, 2610.0, 1200.0),
+            new OhlcBar("2026-11-20", 2640.0, 2650.0, 2610.0, 2640.0, 0.0)
+        );
+        assertThat(service.fetchHistoricalOhlc("GOLD/USD", 30)).isEqualTo(first);
+        server.verify();
+
+        RestClient.Builder fallbackBuilder = RestClient.builder();
+        MockRestServiceServer fallbackServer = MockRestServiceServer.bindTo(fallbackBuilder).build();
+        fallbackServer.expect(requestTo("https://query1.finance.yahoo.com/v8/finance/chart/EURUSD%3DX?range=1mo&interval=1d"))
+            .andRespond(withServerError());
+        fallbackServer.expect(requestTo("https://api.frankfurter.app/2026-10-21..2026-11-20?from=EUR&to=USD"))
+            .andRespond(withSuccess("""
+                {"rates":{"2026-11-20":{"USD":1.08}}}
+                """, MediaType.APPLICATION_JSON));
+
+        MarketDataService fallbackService = new MarketDataService(
+            fallbackBuilder.build(),
+            FIXED_CLOCK,
+            List.of("EUR/USD"),
+            new LiveRateCache(Duration.ofSeconds(60), Ticker.systemTicker())
+        );
+        assertThat(fallbackService.fetchHistoricalOhlc("EUR/USD", 30)).containsExactly(
+            new OhlcBar("2026-11-20", 1.08, 1.08, 1.08, 1.08, 0.0)
+        );
+        fallbackServer.verify();
+    }
+
     private static MarketDataService serviceWithMockYahooResponse(
         String encodedSymbol,
         List<String> pairs,

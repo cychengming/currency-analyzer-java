@@ -16,8 +16,13 @@ public final class RetrievalIntentGate {
     private static final List<String> KNOWLEDGE_CUES = List.of(
         "guide", "note", "notes", "doc", "document", "upload", "explain", "how to",
         "formula", "theory", "kelly", "memo", "memos", "principle", "strategy",
-        "exposure", "what is a ", "what are ", "原则", "公式", "理论", "解释",
-        "备忘录", "笔记", "文档", "指南", "敞口", "怎么设置", "如何配置", "什么叫", "什么是"
+        "exposure", "what is a ", "what are ", "scenario", "playbook", "runbook", "sop",
+        "what should", "should i", "how do i", "how should", "handle", "fomc", "cpi",
+        "nfp", "boj", "ecb", "unwind", "shock", "gap", "losing streak", "risk limit",
+        "conflict", "disagree", "override",
+        "原则", "公式", "理论", "解释", "备忘录", "笔记", "文档", "指南", "敞口",
+        "怎么设置", "如何配置", "什么叫", "什么是", "怎么办", "如何应对", "怎么处理",
+        "预案", "剧本", "风控上限", "连亏", "央行", "非农", "跳空"
     );
 
     private static final List<String> ALERT_OPERATIONAL_CUES = List.of(

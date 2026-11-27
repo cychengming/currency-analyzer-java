@@ -1083,7 +1083,7 @@ function loadPages() {
                     <div class="page-intro-copy">
                         <div class="page-eyebrow">Knowledge Base &amp; RAG</div>
                         <div class="page-heading">Manage documents for Ask Currency Analyzer</div>
-                        <div class="page-subtext">Upload Markdown (.md), plain text (.txt), or CSV (.csv) files to Google Cloud Storage or sync existing bucket objects into PostgreSQL pgvector.</div>
+                        <div class="page-subtext">Upload Markdown (.md) or plain text (.txt) runbooks, guides, and strategy cards to Google Cloud Storage or sync existing bucket objects into PostgreSQL pgvector.</div>
                     </div>
                     <div class="summary-card">
                         <div class="summary-card-title">Storage &amp; Index Target</div>
@@ -1108,13 +1108,13 @@ function loadPages() {
                     <div class="rag-subpanel">
                         <div class="rag-subpanel-title">Upload Document</div>
                         <div class="rag-file-picker">
-                            <input type="file" id="ragUploadFile" accept=".md,.markdown,.txt,.csv,text/markdown,text/plain,text/csv" style="display:none;" onchange="handleRagFileSelection()">
+                            <input type="file" id="ragUploadFile" accept=".md,.markdown,.txt,text/markdown,text/plain" style="display:none;" onchange="handleRagFileSelection()">
                             <button type="button" class="btn-secondary" style="width:auto;" onclick="document.getElementById('ragUploadFile').click()">Choose File</button>
                             <span id="ragUploadFileName" class="rag-file-picker-name">No file chosen</span>
                         </div>
                         <input type="text" id="ragUploadTitle" maxlength="200" placeholder="Optional document title (auto-detected if blank)">
                         <div class="panel-actions" style="justify-content: space-between;">
-                            <span class="field-hint" id="ragMaxSizeHint" style="margin:0;">Max 5 MB (.md, .txt, .csv)</span>
+                            <span class="field-hint" id="ragMaxSizeHint" style="margin:0;">Max 5 MB (.md, .txt)</span>
                             <button type="button" class="btn-primary" style="width:auto;" id="ragUploadBtn" onclick="uploadRagDocument()">Upload &amp; Index</button>
                         </div>
                     </div>
@@ -1123,8 +1123,8 @@ function loadPages() {
                         <div class="rag-subpanel-title">Sync Bucket &amp; Refresh</div>
                         <div class="form-group" style="margin:0;">
                             <label for="ragSyncPrefix">Bucket Prefix</label>
-                            <input type="text" id="ragSyncPrefix" placeholder="e.g. knowledge or knowledge/concepts">
-                            <div class="field-hint">Imports new or updated .md, .txt, and .csv files from GCS.</div>
+                            <input type="text" id="ragSyncPrefix" placeholder="e.g. knowledge or knowledge/scenarios">
+                            <div class="field-hint">Imports new or updated .md and .txt files from GCS.</div>
                         </div>
                         <div class="panel-actions" style="margin-top: auto;">
                             <button type="button" class="btn-primary" style="width:auto;" id="ragSyncBtn" onclick="syncRagFromStorage()">Sync from GCS</button>

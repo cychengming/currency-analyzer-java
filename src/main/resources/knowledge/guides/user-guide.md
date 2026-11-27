@@ -30,8 +30,8 @@ The Trade tab computes `ATR(14)` and 252-day daily volatility (`sigma`) to help 
 
 Open the **Knowledge** tab to manage documents indexed for the AI assistant:
 
-- **Upload Documents**: Upload `.md` (Markdown), `.txt` (plain text), or `.csv` files (up to 5 MB by default). Uploaded files are stored in Google Cloud Storage and automatically parsed, chunked, embedded, and indexed in PostgreSQL (`pgvector`).
-- **Sync from GCS**: Import `.md`, `.txt`, and `.csv` files that were uploaded directly into your configured GCS bucket prefix. Unchanged objects are skipped automatically.
+- **Upload Documents**: Upload `.md` (Markdown) or `.txt` (plain text) guides, scenario runbooks, and strategy cards (up to 5 MB by default). Uploaded files are stored in Google Cloud Storage and automatically parsed, chunked, embedded, and indexed in PostgreSQL (`pgvector`). Market OHLC and policy-rate tables stay in PostgreSQL directly.
+- **Sync from GCS**: Import `.md` and `.txt` files that were uploaded directly into your configured GCS bucket prefix. Unchanged objects are skipped automatically.
 - **Document Lifecycle**: Track status (`PENDING`, `INDEXING`, `READY`, `FAILED`), download originals, trigger re-indexing, or delete uploaded documents (built-in guides are read-only).
 - **Test Retrieval**: Enter a question in the retrieval test box to preview which document chunks and similarity scores match before asking the assistant.
 
