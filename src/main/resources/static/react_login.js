@@ -19,8 +19,18 @@
         }
     }
 
+    function initialReasonFromUrl() {
+        try {
+            const params = new URLSearchParams(window.location.search || '');
+            return (params.get('reason') || '').trim();
+        } catch {
+            return '';
+        }
+    }
+
     function LoginApp() {
         const urlInvite = initialInviteFromUrl();
+        const urlReason = initialReasonFromUrl();
         const [tab, setTab] = useState(urlInvite ? 'register' : 'login');
         const [busy, setBusy] = useState(false);
 
@@ -36,7 +46,9 @@
 
         const [registrationEnabled, setRegistrationEnabled] = useState(false);
         const [inviteMode, setInviteMode] = useState(Boolean(urlInvite));
-        const [infoMessage, setInfoMessage] = useState('');
+        const [infoMessage, setInfoMessage] = useState(
+            urlReason === 'session_expired' ? 'Your session expired. Please sign in again.' : ''
+        );
 
         async function checkStatus() {
             try {

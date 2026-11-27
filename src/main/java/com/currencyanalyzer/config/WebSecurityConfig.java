@@ -2,6 +2,8 @@ package com.currencyanalyzer.config;
 
 import com.currencyanalyzer.auth.AccountStatusFilter;
 import com.currencyanalyzer.auth.KnowledgeAdminService;
+import com.currencyanalyzer.auth.PersistentSessionFilter;
+import com.currencyanalyzer.auth.PersistentSessionService;
 import com.currencyanalyzer.auth.UserRepository;
 import com.currencyanalyzer.pubsub.PubSubAuthenticationFilter;
 import com.currencyanalyzer.pubsub.PubSubOidcVerifier;
@@ -70,7 +72,8 @@ public class WebSecurityConfig {
         HttpSecurity http,
         CsrfTokenRepository csrfTokenRepository,
         UserRepository userRepository,
-        KnowledgeAdminService knowledgeAdminService
+        KnowledgeAdminService knowledgeAdminService,
+        PersistentSessionService persistentSessionService
     ) throws Exception {
         http
             .csrf(csrf -> csrf
@@ -78,12 +81,16 @@ public class WebSecurityConfig {
                 .csrfTokenRepository(csrfTokenRepository)
                 .csrfTokenRequestHandler(new CsrfTokenRequestAttributeHandler()))
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.IF_REQUIRED))
+            .addFilterBefore(
+                new PersistentSessionFilter(persistentSessionService),
+                UsernamePasswordAuthenticationFilter.class
+            )
             .addFilterAfter(
                 new AccountStatusFilter(userRepository, knowledgeAdminService),
                 UsernamePasswordAuthenticationFilter.class
             )
             .authorizeHttpRequests(authorize -> authorize
-                .dispatcherTypeMatchers(DispatcherType.ERROR).permitAll()
+                .dispatcherTypeMatchers(DispatcherType.ERROR, DispatcherType.ASYNC).permitAll()
                 .requestMatchers(
                     "/",
                     "/index.html",

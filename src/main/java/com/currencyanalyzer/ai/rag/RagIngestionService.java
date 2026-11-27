@@ -22,7 +22,7 @@ import java.util.concurrent.atomic.AtomicLong;
 public class RagIngestionService {
 
     private static final Logger log = LoggerFactory.getLogger(RagIngestionService.class);
-    private static final int EMBEDDING_BATCH_SIZE = 16;
+    private static final int EMBEDDING_BATCH_SIZE = 4;
     // One batch at a time. A second worker does not embed faster on the pinned
     // 1 vCPU and would keep two ONNX batches resident inside the 1 GiB limit.
     private static final int INGESTION_CONCURRENCY = 1;

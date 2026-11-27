@@ -86,17 +86,16 @@ jobs:
           service: ${{ env.SERVICE_NAME }}
           region: ${{ env.GCP_REGION }}
           image: ${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.AR_REPO }}/app:${{ github.sha }}
-          # Applied on every deploy. The previous --cpu=2 --memory=2Gi flags are
-          # what replaced the console's 1 vCPU / 1 GiB revision. Omitting them
-          # would keep the previous revision's size, which is 2 / 2 GiB today,
-          # so the 1 / 1 GiB pin has to be explicit. Concurrency and startup CPU
-          # boost are omitted on purpose and stay as set on the service.
+          # Restored to 2 vCPU / 2 GiB: Java 25 + Spring Boot 4 + quantized MiniLM
+          # ONNX Runtime + DeepSeek SSE streaming peaked at 1142 MiB RSS on 1 GiB
+          # and triggered Cloud Run OOMKills mid-response. 2 vCPU / 2 GiB provides
+          # ~900 MiB native headroom and eliminates single-core GC/ONNX latency.
           # --no-cpu-throttling keeps instance-based billing.
           flags: >-
             --service-account=currency-analyzer-run@${{ env.GCP_PROJECT_ID }}.iam.gserviceaccount.com
             --add-cloudsql-instances=${{ env.CLOUD_SQL_CONNECTION_NAME }}
-            --cpu=1
-            --memory=1Gi
+            --cpu=2
+            --memory=2Gi
             --timeout=300
             --min-instances=0
             --max-instances=1
@@ -107,7 +106,7 @@ jobs:
           env_vars: |
             DATABASE_URL=jdbc:postgresql:///currency_analyzer?cloudSqlInstance=${{ env.CLOUD_SQL_CONNECTION_NAME }}&socketFactory=com.google.cloud.sql.postgres.SocketFactory
             DATABASE_USERNAME=currency
-            DATABASE_POOL_SIZE=5
+            DATABASE_POOL_SIZE=8
             SESSION_COOKIE_SECURE=true
             AUTH_REGISTRATION_ENABLED=${{ vars.AUTH_REGISTRATION_ENABLED || 'false' }}
             STORAGE_PROVIDER=gcs

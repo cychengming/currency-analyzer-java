@@ -2,6 +2,8 @@ package com.currencyanalyzer.ai.rag;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -14,16 +16,38 @@ public class RagStartupSyncRunner implements ApplicationRunner {
     private static final Logger log = LoggerFactory.getLogger(RagStartupSyncRunner.class);
 
     private final RagDocumentService documentService;
+    private final long startupSyncDelayMs;
 
     public RagStartupSyncRunner(RagDocumentService documentService) {
+        this(documentService, 0L);
+    }
+
+    @Autowired
+    public RagStartupSyncRunner(
+        RagDocumentService documentService,
+        @Value("${app.rag.startup-sync-delay-ms:15000}") long startupSyncDelayMs
+    ) {
         this.documentService = documentService;
+        this.startupSyncDelayMs = Math.max(0L, startupSyncDelayMs);
     }
 
     @Override
     public void run(ApplicationArguments args) {
-        Thread worker = new Thread(this::syncSafely, "rag-startup-sync");
+        Thread worker = new Thread(this::runWithOptionalDelay, "rag-startup-sync");
         worker.setDaemon(true);
         worker.start();
+    }
+
+    private void runWithOptionalDelay() {
+        if (startupSyncDelayMs > 0L) {
+            try {
+                Thread.sleep(startupSyncDelayMs);
+            } catch (InterruptedException exception) {
+                Thread.currentThread().interrupt();
+                return;
+            }
+        }
+        syncSafely();
     }
 
     void syncSafely() {
