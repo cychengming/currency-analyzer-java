@@ -32,7 +32,7 @@ flowchart LR
     GHA -->|"1. mvnw verify + SonarCloud"| QG["Quality Gate"]
     GHA -->|"2. Keyless OIDC (WIF)"| IAM["GCP Workload Identity Pool"]
     GHA -->|"3. Buildx + Push"| AR["Artifact Registry (us-west1-docker.pkg.dev)"]
-    GHA -->|"4. deploy-cloudrun"| CR["Cloud Run Service (us-west1, 2 vCPU / 2 GiB)"]
+    GHA -->|"4. deploy-cloudrun"| CR["Cloud Run Service (us-west1, 1 vCPU / 1 GiB)"]
 
     Browser["User Browser (HTTPS)"] -->|"TLS terminated by Cloud Run"| CR
     CR -->|"Built-in Cloud SQL Auth Proxy (/cloudsql/...)"| SQL["Cloud SQL PostgreSQL 16 (us-west1, pgvector + pg_trgm)"]
@@ -100,7 +100,7 @@ Dockerfile
 
 ### 3.4 Multi-Stage Cloud Run `Dockerfile`
 
-Current [Dockerfile](file:///c:/Users/cyche/Documents/ChatGPT/currency-analyzer-java/Dockerfile) now uses pinned `eclipse-temurin:25-jdk-noble` / `eclipse-temurin:25-jre-noble` (Ubuntu 24.04 LTS), zero `apt-get` calls, Java 25 `HttpClient` to pre-bake the ~130 MB MiniLM ONNX + tokenizer files (`ARG PREBAKE_EMBEDDING_MODEL=true`), non-root UID `10001` (`currency`), `ENV PORT=8080`, and `-XX:MaxRAMPercentage=55.0 -XX:+ExitOnOutOfMemoryError` so 2 GiB Cloud Run containers reserve ~900 MiB for ONNX Runtime native memory and Metaspace.
+Current [Dockerfile](file:///c:/Users/cyche/Documents/ChatGPT/currency-analyzer-java/Dockerfile) now uses pinned `eclipse-temurin:25-jdk-noble` / `eclipse-temurin:25-jre-noble` (Ubuntu 24.04 LTS), zero `apt-get` calls, Java 25 `HttpClient` to pre-bake the ~130 MB MiniLM ONNX + tokenizer files (`ARG PREBAKE_EMBEDDING_MODEL=true`), non-root UID `10001` (`currency`), `ENV PORT=8080`, `ENV MALLOC_ARENA_MAX=2`, and `-XX:MaxRAMPercentage=45.0 -XX:+ExitOnOutOfMemoryError`. On the pinned 1 GiB Cloud Run limit that heap cap is about 460 MiB, leaving the rest for ONNX Runtime native memory, Metaspace, and glibc.
 
 ```dockerfile
 # syntax=docker/dockerfile:1
@@ -155,9 +155,10 @@ COPY --from=build /workspace/target/currency-analyzer-java-*.jar /app/app.jar
 COPY --from=model-fetch /models/embeddings /app/models/embeddings
 RUN chown -R currency:currency /app
 USER currency
+ENV MALLOC_ARENA_MAX=2
 ENV PORT=8080
 EXPOSE 8080
-ENTRYPOINT ["java", "-XX:MaxRAMPercentage=55.0", "-XX:+ExitOnOutOfMemoryError", "-Djava.security.egd=file:/dev/./urandom", "-jar", "/app/app.jar"]
+ENTRYPOINT ["java", "-XX:MaxRAMPercentage=45.0", "-XX:+ExitOnOutOfMemoryError", "-Djava.security.egd=file:/dev/./urandom", "-jar", "/app/app.jar"]
 ```
 
 ### 3.5 GitHub Actions Deploy Pipeline (`.github/workflows/deploy-cloud-run.yml`)
@@ -178,7 +179,7 @@ Runs on pushes to `master` (once `vars.GCP_CLOUD_RUN_DEPLOY_ENABLED == 'true'`) 
 ## 4. Cloud Run Runtime Sizing, Sessions & Cost (`us-west1`)
 
 ### Phase 1 Runtime Configuration (Single Active Instance)
-- **CPU & Memory:** `--cpu=2 --memory=2Gi` (required for responsive Java 25 + local ONNX MiniLM inference without OOM).
+- **CPU & Memory:** `--cpu=1 --memory=1Gi`. The deploy workflow passes both flags on every revision, so a later GitHub Actions run does not restore 2 vCPU / 2 GiB. Startup CPU boost and request concurrency stay on the service (they are not passed as flags). Instance-based billing stays `--no-cpu-throttling`.
 - **Concurrency & Scaling:** `--min-instances=0 --max-instances=1 --no-cpu-throttling --timeout=300`
   - **Why `--max-instances=1`?** Spring Security currently stores HTTP sessions (`JSESSIONID`) in Tomcat memory, and `RagIngestionService` executes async chunk/embedding jobs in an in-process thread pool. Capping at 1 instance guarantees session continuity and prevents duplicate startup sync races.
   - **Why `--no-cpu-throttling`?** Cloud Run throttles CPU to near-zero between HTTP responses by default, which would stall background `RagIngestionService` indexing jobs after `POST /api/rag/documents` or `POST /api/rag/sync` returns `202 Accepted`.
@@ -193,7 +194,7 @@ Runs on pushes to `master` (once `vars.GCP_CLOUD_RUN_DEPLOY_ENABLED == 'true'`) 
 ### Estimated Monthly Cost in `us-west1` (Tier 1 GCP Region)
 | Resource | Configuration | Estimated Cost / Month |
 |---|---|---|
-| **Cloud Run** | `min=0`, `max=1`, `2 vCPU / 2 GiB`, light/personal traffic | **\$0 – \$5** *(Cloud Run free tier covers first 180k vCPU-s & 360k GiB-s/mo)* |
+| **Cloud Run** | `min=0`, `max=1`, `1 vCPU / 1 GiB`, light/personal traffic | **\$0 – \$5** *(Cloud Run free tier covers first 180k vCPU-s & 360k GiB-s/mo)* |
 | **Cloud SQL PG16** | `currency-analyzer` (`us-west1`, Public IP enabled for Cloud SQL Auth Proxy) | **~\$10 – \$35** *(depends on selected machine tier)* |
 | **GCS Bucket** | `gs://currency-analyze` (`us-east1` Standard, Soft Delete) | **< \$0.50** |
 | **Artifact Registry & Secrets** | `< 2 GB` images + 2 secrets | **< \$0.50** |

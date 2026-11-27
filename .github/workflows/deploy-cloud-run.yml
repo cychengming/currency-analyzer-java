@@ -86,11 +86,17 @@ jobs:
           service: ${{ env.SERVICE_NAME }}
           region: ${{ env.GCP_REGION }}
           image: ${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.AR_REPO }}/app:${{ github.sha }}
+          # Applied on every deploy. The previous --cpu=2 --memory=2Gi flags are
+          # what replaced the console's 1 vCPU / 1 GiB revision. Omitting them
+          # would keep the previous revision's size, which is 2 / 2 GiB today,
+          # so the 1 / 1 GiB pin has to be explicit. Concurrency and startup CPU
+          # boost are omitted on purpose and stay as set on the service.
+          # --no-cpu-throttling keeps instance-based billing.
           flags: >-
             --service-account=currency-analyzer-run@${{ env.GCP_PROJECT_ID }}.iam.gserviceaccount.com
             --add-cloudsql-instances=${{ env.CLOUD_SQL_CONNECTION_NAME }}
-            --cpu=2
-            --memory=2Gi
+            --cpu=1
+            --memory=1Gi
             --timeout=300
             --min-instances=0
             --max-instances=1
