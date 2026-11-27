@@ -15,13 +15,16 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
 
 @Component
 public class KnowledgeLibrary {
 
     private static final Logger log = LoggerFactory.getLogger(KnowledgeLibrary.class);
-    private static final List<String> LOCATIONS = List.of(
-        "classpath*:knowledge/guides/*.md"
+    private static final Map<String, String> LOCATIONS = Map.of(
+        "guides", "classpath*:knowledge/guides/*.md",
+        "strategies", "classpath*:knowledge/strategies/*.md",
+        "scenarios", "classpath*:knowledge/scenarios/*.md"
     );
 
     private final List<KnowledgeNote> notes;
@@ -42,18 +45,19 @@ public class KnowledgeLibrary {
     private static List<KnowledgeNote> loadClasspathNotes() {
         PathMatchingResourcePatternResolver resolver = new PathMatchingResourcePatternResolver();
         List<KnowledgeNote> loaded = new ArrayList<>();
-        for (String location : LOCATIONS) {
+        for (String folder : List.of("guides", "strategies", "scenarios")) {
+            String location = LOCATIONS.get(folder);
             try {
                 Resource[] resources = resolver.getResources(location);
                 Arrays.sort(resources, Comparator.comparing(Resource::getFilename, Comparator.nullsLast(String::compareTo)));
                 for (Resource resource : resources) {
-                    loaded.add(read(resource, "guides"));
+                    loaded.add(read(resource, folder));
                 }
             } catch (IOException exception) {
                 throw new UncheckedIOException("Unable to read assistant knowledge from " + location, exception);
             }
         }
-        log.info("Loaded {} built-in assistant guide(s)", loaded.size());
+        log.info("Loaded {} built-in assistant guide(s), strategy card(s), and scenario runbook(s)", loaded.size());
         return List.copyOf(loaded);
     }
 

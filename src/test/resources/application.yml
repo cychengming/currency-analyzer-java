@@ -13,6 +13,8 @@ spring:
       embedding: none
 
 app:
+  market:
+    incremental-sync-enabled: false
   ai:
     deepseek:
       api-key: ""

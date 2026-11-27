@@ -136,13 +136,22 @@ class RagDocumentControllerTests {
             .andExpect(status().isBadRequest())
             .andExpect(jsonPath("$.error", containsString("Unsupported file type")));
 
-        storageClient.put("knowledge/test.csv", "pair,signal\nEUR/USD,breakout\n".getBytes(StandardCharsets.UTF_8), "text/csv");
+        MockMultipartFile badCsv = new MockMultipartFile(
+            "file", "prices.csv", "text/csv", "date,close\n2026-11-20,1.08\n".getBytes(StandardCharsets.UTF_8)
+        );
+        mockMvc.perform(multipart("/api/rag/documents").file(badCsv).with(user("admin")).with(csrf()))
+            .andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.error", containsString("Unsupported file type")));
+
+        storageClient.put("knowledge/test.txt", "Scenario runbook note\nFollow stop discipline.\n".getBytes(StandardCharsets.UTF_8), "text/plain");
+        storageClient.put("knowledge/ignored.csv", "pair,signal\nEUR/USD,breakout\n".getBytes(StandardCharsets.UTF_8), "text/csv");
         storageClient.put("knowledge-other/leak.md", "# Leak\nShould not sync".getBytes(StandardCharsets.UTF_8), "text/markdown");
 
         mockMvc.perform(post("/api/rag/sync").param("prefix", "knowledge").with(user("admin")).with(csrf()))
             .andExpect(status().isAccepted())
             .andExpect(jsonPath("$.queued").value(1))
-            .andExpect(jsonPath("$.scanned").value(1));
+            .andExpect(jsonPath("$.ignored").value(1))
+            .andExpect(jsonPath("$.scanned").value(2));
 
         mockMvc.perform(post("/api/rag/sync").param("prefix", "knowledge-other").with(user("admin")).with(csrf()))
             .andExpect(status().isBadRequest());

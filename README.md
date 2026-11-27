@@ -74,6 +74,9 @@ The importer opens SQLite read-only, copies all application tables in one target
 
 ## Documentation
 
+- [System architecture summary & decision log (ADR)](docs/SYSTEM_ARCHITECTURE_AND_DECISIONS.md)
+- [5-Stage trading workstation roadmap](docs/TRADING_WORKSTATION_ROADMAP.md)
+- [AI chat & RAG architecture review](docs/AI_RAG_ARCHITECTURE_REVIEW.md)
 - [Migration plan](docs/JAVA_REFACTOR_PLAN.md)
 - [Implementation status](docs/IMPLEMENTATION_STATUS.md)
 - [AI assistant design and estimate](docs/AI_ASSISTANT_MODULE.md)

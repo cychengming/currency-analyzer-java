@@ -68,6 +68,7 @@ public class MarketDataService {
     private final List<String> configuredPairs;
     private final LiveRateCache liveRateCache;
     private final Cache<HistoricalKey, List<HistoricalPoint>> historicalCache;
+    private final Cache<HistoricalKey, List<OhlcBar>> ohlcCache;
 
     @Autowired
     public MarketDataService(
@@ -82,7 +83,8 @@ public class MarketDataService {
             clock,
             parseConfiguredPairs(pairs),
             new LiveRateCache(Duration.ofSeconds(liveCacheTtlSeconds), Ticker.systemTicker()),
-            buildHistoricalCache(historicalCacheTtlSeconds)
+            buildHistoricalCache(historicalCacheTtlSeconds),
+            buildOhlcCache(historicalCacheTtlSeconds)
         );
     }
 
@@ -97,7 +99,8 @@ public class MarketDataService {
             clock,
             configuredPairs,
             liveRateCache,
-            buildHistoricalCache(DEFAULT_HISTORICAL_CACHE_TTL_SECONDS)
+            buildHistoricalCache(DEFAULT_HISTORICAL_CACHE_TTL_SECONDS),
+            buildOhlcCache(DEFAULT_HISTORICAL_CACHE_TTL_SECONDS)
         );
     }
 
@@ -108,6 +111,24 @@ public class MarketDataService {
         LiveRateCache liveRateCache,
         Cache<HistoricalKey, List<HistoricalPoint>> historicalCache
     ) {
+        this(
+            restClient,
+            clock,
+            configuredPairs,
+            liveRateCache,
+            historicalCache,
+            buildOhlcCache(DEFAULT_HISTORICAL_CACHE_TTL_SECONDS)
+        );
+    }
+
+    MarketDataService(
+        RestClient restClient,
+        Clock clock,
+        List<String> configuredPairs,
+        LiveRateCache liveRateCache,
+        Cache<HistoricalKey, List<HistoricalPoint>> historicalCache,
+        Cache<HistoricalKey, List<OhlcBar>> ohlcCache
+    ) {
         this.restClient = restClient;
         this.objectMapper = new ObjectMapper();
         this.clock = clock;
@@ -116,9 +137,17 @@ public class MarketDataService {
             .toList();
         this.liveRateCache = liveRateCache;
         this.historicalCache = historicalCache;
+        this.ohlcCache = ohlcCache;
     }
 
     private static Cache<HistoricalKey, List<HistoricalPoint>> buildHistoricalCache(long ttlSeconds) {
+        return Caffeine.newBuilder()
+            .expireAfterWrite(Duration.ofSeconds(Math.max(1, ttlSeconds)))
+            .maximumSize(HISTORICAL_CACHE_MAX_ENTRIES)
+            .build();
+    }
+
+    private static Cache<HistoricalKey, List<OhlcBar>> buildOhlcCache(long ttlSeconds) {
         return Caffeine.newBuilder()
             .expireAfterWrite(Duration.ofSeconds(Math.max(1, ttlSeconds)))
             .maximumSize(HISTORICAL_CACHE_MAX_ENTRIES)
@@ -219,18 +248,48 @@ public class MarketDataService {
         return loaded;
     }
 
+    public List<OhlcBar> fetchHistoricalOhlc(String requestedPair, int requestedDays) {
+        String pair = normalizePair(requestedPair);
+        validatePair(pair);
+        if (requestedDays < 1 || requestedDays > MAX_HISTORY_DAYS) {
+            throw new IllegalArgumentException("days must be between 1 and " + MAX_HISTORY_DAYS);
+        }
+
+        HistoricalKey cacheKey = new HistoricalKey(pair, requestedDays);
+        List<OhlcBar> cached = ohlcCache.getIfPresent(cacheKey);
+        if (cached != null) {
+            return cached;
+        }
+
+        List<OhlcBar> loaded = List.copyOf(loadHistoricalOhlc(pair, requestedDays));
+        if (!loaded.isEmpty()) {
+            ohlcCache.put(cacheKey, loaded);
+        }
+        return loaded;
+    }
+
     private List<HistoricalPoint> loadHistorical(String pair, int requestedDays) {
+        return loadHistoricalOhlc(pair, requestedDays).stream()
+            .map(bar -> new HistoricalPoint(bar.date(), bar.close()))
+            .toList();
+    }
+
+    private List<OhlcBar> loadHistoricalOhlc(String pair, int requestedDays) {
         String commoditySymbol = COMMODITY_SYMBOLS.get(pair);
         if (commoditySymbol != null) {
-            return trimToRecent(fetchYahooHistory(commoditySymbol, requestedDays), requestedDays);
+            return trimOhlcToRecent(fetchYahooOhlcHistory(commoditySymbol, requestedDays), requestedDays);
         }
 
         String[] parts = pair.split("/");
-        List<HistoricalPoint> points = fetchYahooHistory(parts[0] + parts[1] + "=X", requestedDays);
-        if (points.isEmpty()) {
-            points = fetchFrankfurterHistory(parts[0], parts[1], requestedDays);
+        List<OhlcBar> bars = fetchYahooOhlcHistory(parts[0] + parts[1] + "=X", requestedDays);
+        if (bars.isEmpty()) {
+            bars = fetchFrankfurterHistory(parts[0], parts[1], requestedDays).stream()
+                .map(point -> new OhlcBar(
+                    point.date(), point.rate(), point.rate(), point.rate(), point.rate(), 0.0
+                ))
+                .toList();
         }
-        return trimToRecent(points, requestedDays);
+        return trimOhlcToRecent(bars, requestedDays);
     }
 
     private Map<String, LiveRate> fetchCommodityRates() {
@@ -421,7 +480,7 @@ public class MarketDataService {
         }
     }
 
-    private List<HistoricalPoint> fetchYahooHistory(String symbol, int days) {
+    private List<OhlcBar> fetchYahooOhlcHistory(String symbol, int days) {
         String range = yahooRange(days);
         try {
             JsonNode payload = getJson(
@@ -436,30 +495,52 @@ public class MarketDataService {
 
             JsonNode result = results.get(0);
             JsonNode timestamps = result.path("timestamp");
-            JsonNode closes = result.path("indicators").path("quote").path(0).path("close");
+            JsonNode quote = result.path("indicators").path("quote").path(0);
+            JsonNode opens = quote.path("open");
+            JsonNode highs = quote.path("high");
+            JsonNode lows = quote.path("low");
+            JsonNode closes = quote.path("close");
+            JsonNode volumes = quote.path("volume");
             if (!timestamps.isArray() || !closes.isArray()) {
                 return List.of();
             }
 
-            Map<String, HistoricalPoint> byDate = new TreeMap<>();
+            Map<String, OhlcBar> byDate = new TreeMap<>();
             int count = Math.min(timestamps.size(), closes.size());
             for (int index = 0; index < count; index++) {
-                JsonNode close = closes.get(index);
+                JsonNode closeNode = closes.get(index);
                 JsonNode timestamp = timestamps.get(index);
-                if (!close.isNumber() || !timestamp.canConvertToLong()) {
+                Double close = positiveNumber(closeNode);
+                if (close == null || !timestamp.canConvertToLong()) {
                     continue;
                 }
+                double open = positiveOrDefault(opens.path(index), close);
+                double rawHigh = positiveOrDefault(highs.path(index), Math.max(open, close));
+                double rawLow = positiveOrDefault(lows.path(index), Math.min(open, close));
+                double high = Math.max(rawHigh, Math.max(open, close));
+                double low = Math.min(rawLow, Math.min(open, close));
+                double volume = nonNegativeOrZero(volumes.path(index));
                 String date = Instant.ofEpochSecond(timestamp.asLong())
                     .atZone(ZoneOffset.UTC)
                     .toLocalDate()
                     .toString();
-                byDate.put(date, new HistoricalPoint(date, close.asDouble()));
+                byDate.put(date, new OhlcBar(date, open, high, low, close, volume));
             }
             return new ArrayList<>(byDate.values());
         } catch (RuntimeException exception) {
             log.warn("Unable to fetch Yahoo history for {}: {}", symbol, rootMessage(exception));
             return List.of();
         }
+    }
+
+    private static double positiveOrDefault(JsonNode node, double fallback) {
+        Double value = positiveNumber(node);
+        return value != null ? value : fallback;
+    }
+
+    private static double nonNegativeOrZero(JsonNode node) {
+        Double value = finiteNumber(node);
+        return value != null && value >= 0 ? value : 0.0;
     }
 
     private Optional<LiveRate> fetchYahooLiveRate(String symbol) {
@@ -626,9 +707,9 @@ public class MarketDataService {
             .toList();
     }
 
-    private static List<HistoricalPoint> trimToRecent(List<HistoricalPoint> points, int days) {
-        List<HistoricalPoint> sorted = points.stream()
-            .sorted(Comparator.comparing(HistoricalPoint::date))
+    private static List<OhlcBar> trimOhlcToRecent(List<OhlcBar> bars, int days) {
+        List<OhlcBar> sorted = bars.stream()
+            .sorted(Comparator.comparing(OhlcBar::date))
             .toList();
         int fromIndex = Math.max(0, sorted.size() - days);
         return sorted.subList(fromIndex, sorted.size());

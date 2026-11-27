@@ -85,5 +85,14 @@ class FlywayMigrationIntegrityTests {
             Integer.class
         );
         assertEquals(3, ruleTables);
+
+        Integer pipelineTables = jdbcTemplate.queryForObject(
+            """
+            SELECT COUNT(*) FROM information_schema.tables
+            WHERE table_name IN ('ohlc_history', 'policy_rate_history', 'pipeline_backtest_runs')
+            """,
+            Integer.class
+        );
+        assertEquals(3, pipelineTables);
     }
 }

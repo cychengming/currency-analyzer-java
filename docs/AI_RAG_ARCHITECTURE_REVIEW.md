@@ -101,25 +101,28 @@ Severity: **High** · **Medium** · **Low**
 
 Tool-using turns execute at least **two** model calls inside `SpringAiChatRunner` (Round 1: tool selection; Round 2: answer synthesis). Before Phase 1, unconditional pre-retrieval routinely matched generic terms (`EUR/USD`, `rate`, `alert`) against guides and injected `500–1,200` tokens of `UNTRUSTED REFERENCE CONTEXT` that stayed in the prompt for **every round**—billing `1,000–2,400` unnecessary tokens against a `~3,850`-token 2-round baseline (**~21%–38%** total input overhead). Skipping pre-retrieval via `RetrievalIntentGate` on pure operational turns (while retaining on-demand `search_notes` and deduplicating attached `KnowledgeNote.path()` IDs through `ToolUserContext`) eliminates that repeated multi-round tax without losing recall on hybrid queries.
 
-### Phase 2 — Retrieval & Answer Quality *(2–4 weeks)*
+### Phase 2 — Retrieval & Answer Quality *(Deferred — RAG Frozen at Phase 1)*
 1. **Cross-encoder reranker (R4 + R2 + R3):** Score the top 20–24 RRF candidates using `bge-reranker-v2-m3` (local ONNX or hosted rerank API) and calibrate the cutoff on reranker scores, retiring brittle magic boosts.
 2. **Parent/child small-to-big chunking (R1):** Index small child chunks (~150 tokens) for high-precision matching while injecting their parent section (~600–900 tokens) into prompt context, replacing `expandStrongDocuments`.
 3. **Versioned embedding upgrade (R5):** Add `embedding_model VARCHAR(128)` and `embedding_dim INTEGER` to `rag_chunks` (portable migration + PostgreSQL vector index migration) and benchmark `multilingual-e5-small` vs `bge-m3` against the golden set.
 4. **End-to-end citations (E1):** Number injected context blocks `[1]..[n]`, instruct inline citations, emit an SSE `citations` event, persist citations on `ai_messages`, and render clickable source chips in `ai-chat.js`.
 5. **Real `pgvector` eval in CI (E2):** Run `RagRetrievalEvaluationTests` against PostgreSQL + `pgvector` (Testcontainers) and report vector-only, lexical-only, and hybrid Recall@5 / MRR / nDCG@5.
 
-### Phase 3 — Enterprise Agent Platform *(1–2 months)*
+### Phase 3 — Enterprise Agent Platform *(Deferred / Re-scoped into Master-as-Code Milestones)*
 1. **Single agent loop (A4):** Deprecate and remove the duplicate non-Spring-AI tool loop in `AiConversationService` / `DeepSeekAiProvider`.
-2. **Human-in-the-loop mutations (A5):** Have `create_alert_rule` and `update_alert_rule_status` return a server-persisted pending confirmation token with UI Confirm/Cancel buttons so LLM tool calls never execute state mutations unilaterally.
+2. **Human-in-the-loop mutations (A5):** Have `create_alert_rule` and `update_alert_rule_status` return a server-persisted pending confirmation token with UI Confirm/Cancel buttons so LLM tool calls never execute state mutations unilaterally *(scheduled in Milestone 3 of the Master-as-Code roadmap)*.
 3. **Rolling memory & follow-up rewrite (A6, R8):** Persist rolling conversation summaries once threads exceed ~16 turns and optionally run lightweight non-thinking follow-up condensation when `isFollowUp()` triggers.
 4. **End-to-end tracing, eval & provider resilience (E2–E4, R6–R7):** Add OpenTelemetry spans (`retrieve -> rerank -> llm -> tools`), offline LLM-as-judge faithfulness/citation evaluation, user thumbs-up/down feedback, Resilience4j circuit breakers + fallback routing, and BM25 / `hnsw.ef_search` tuning when corpus size exceeds ~5,000 docs.
 
 ---
 
-## 5. Open Product Decisions (For Prioritization Before Phase 2)
+## 5. Resolved Product Decisions (2026-11-26 — "Master-as-Code" Pivot)
 
-1. **Local ONNX vs. Hosted API:** Should Phase 2 reranking (`bge-reranker-v2-m3`) and upgraded embeddings (`bge-m3`) remain strictly local ONNX on Cloud Run CPU/RAM, or can external hosted inference APIs be used?
-2. **Private Per-User Documents (E5):** Are private user uploads (`journal/`, holdings) planned? If yes, add `visibility` and `owner_username` filtering to `rag_documents` and `RagDocumentRepository` before Phase 2 schema migrations.
+1. **Two-Store Split (Scenario SOPs in RAG vs. Post-Close Incremental SQL for Market Data):** Raw RAG over trading books mixes conflicting opinions, and chunking `.csv` tables into `pgvector` breaks numeric queries. `.csv` parsing is removed from RAG (`.md` / `.txt` only); RAG is intentionally frozen at Phase 1 strictly for system documentation (`knowledge/guides/`), 1-page **Vetted Strategy Cards** (`knowledge/strategies/`), and conflict-free **Desk Scenario Runbook SOPs** (`knowledge/scenarios/`), while tabular OHLC & policy-rate data live in relational PostgreSQL (`ohlc_history` / `policy_rate_history`) updated via post-NY-5pm incremental delta loading (`IncrementalOhlcSyncService`).
+2. **5-Stage Carver/AQR Benchmark Spine + Master Arena:** Trading methodologies are compiled into pluggable Stage 2 (`SignalEngine`) and Stage 3 (`PortfolioRiskSizer` / `RegimeRiskOverlay`) Java interfaces via [distill-master-module/SKILL.md](../.agents/skills/distill-master-module/SKILL.md) and falsified with Spot-vs-Carry attribution and crisis replay before entering production target sheets.
+3. **Deferred Phase 2 RAG Constraints (Preserved if Reactivated Later):** Should Phase 2 RAG ever be resumed for large multi-user corpora, it will use a pluggable hosted API primary (Vertex AI Ranking/Embeddings or HTTP `bge-m3` / `bge-reranker-v2-m3`) with local ONNX fallback, and add `visibility` (`'SHARED' | 'PRIVATE'`) + `owner_username` filtering on `rag_documents`.
+
+See [TRADING_WORKSTATION_ROADMAP.md](TRADING_WORKSTATION_ROADMAP.md) for the full 4-milestone execution plan covering the 5-stage pure-Java pipeline, Paper Trade & Live Master Target Sheet, Discretionary-vs-Master Skills, and the Spring AI `/mcp` server.
 
 ---
 

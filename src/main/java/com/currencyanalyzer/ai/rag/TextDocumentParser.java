@@ -15,7 +15,7 @@ import java.util.Set;
 @Component
 public class TextDocumentParser implements DocumentParser {
 
-    private static final Set<String> SUPPORTED_EXTENSIONS = Set.of(".md", ".markdown", ".txt", ".csv");
+    private static final Set<String> SUPPORTED_EXTENSIONS = Set.of(".md", ".markdown", ".txt");
     private static final Set<String> LOW_SIGNAL_HEADINGS = Set.of("标签", "tags", "tag");
     private static final int MIN_STANDALONE_SECTION_CHARS = 45;
     private static final int MAX_QUOTE_METADATA_STUB_CHARS = 140;
@@ -55,7 +55,6 @@ public class TextDocumentParser implements DocumentParser {
     public String inferContentType(String filename) {
         return switch (extension(filename)) {
             case ".md", ".markdown" -> "text/markdown; charset=utf-8";
-            case ".csv" -> "text/csv; charset=utf-8";
             default -> "text/plain; charset=utf-8";
         };
     }
@@ -63,7 +62,7 @@ public class TextDocumentParser implements DocumentParser {
     @Override
     public ParsedDocument parse(String filename, byte[] rawBytes, String titleOverride) {
         if (!supports(filename)) {
-            throw new IllegalArgumentException("Unsupported file type. Supported formats: .md, .txt, .csv");
+            throw new IllegalArgumentException("Unsupported file type. Supported formats: .md, .txt");
         }
         if (rawBytes == null || rawBytes.length == 0) {
             throw new IllegalArgumentException("Uploaded file must not be empty");
@@ -74,10 +73,6 @@ public class TextDocumentParser implements DocumentParser {
         }
 
         String ext = extension(filename);
-        if (".csv".equals(ext)) {
-            String title = resolveTitle(titleOverride, "", filename);
-            return new ParsedDocument(title, parseCsv(text));
-        }
         if (".md".equals(ext) || ".markdown".equals(ext)) {
             return parseMarkdown(filename, text, titleOverride);
         }
@@ -135,98 +130,6 @@ public class TextDocumentParser implements DocumentParser {
             chunks.add(new ParsedChunk(chunks.size(), heading, piece));
         }
         return List.copyOf(chunks);
-    }
-
-    private List<ParsedChunk> parseCsv(String raw) {
-        String normalized = raw.replace("\r\n", "\n").replace('\r', '\n');
-        List<String> records = new ArrayList<>();
-        for (String record : csvRecords(normalized)) {
-            if (!record.isBlank()) {
-                records.add(record.strip());
-            }
-        }
-        if (records.isEmpty()) {
-            throw new IllegalArgumentException("Uploaded CSV file is empty");
-        }
-        String header = records.getFirst();
-        List<String> rows = records.subList(1, records.size());
-        if (rows.isEmpty()) {
-            return List.of(new ParsedChunk(0, "CSV Header", header));
-        }
-
-        List<ParsedChunk> chunks = new ArrayList<>();
-        StringBuilder current = new StringBuilder(header);
-        int startRow = 1;
-        int currentRow = 0;
-        for (String row : rows) {
-            currentRow++;
-            if (estimateTokens(row) > chunkMaxTokens) {
-                if (current.length() > header.length() && chunks.size() < maxChunksPerDocument) {
-                    chunks.add(new ParsedChunk(chunks.size(), "Rows " + startRow + "-" + (currentRow - 1), current.toString()));
-                }
-                for (String piece : splitWithOverlap(row)) {
-                    if (chunks.size() >= maxChunksPerDocument) {
-                        return List.copyOf(chunks);
-                    }
-                    chunks.add(new ParsedChunk(chunks.size(), "Row " + currentRow, header + "\n" + piece));
-                }
-                current = new StringBuilder(header);
-                startRow = currentRow + 1;
-                continue;
-            }
-            int nextTokens = estimateTokens(current.toString()) + 1 + estimateTokens(row);
-            if (current.length() > header.length() && nextTokens > chunkMaxTokens) {
-                int endRow = currentRow - 1;
-                chunks.add(new ParsedChunk(
-                    chunks.size(),
-                    "Rows " + startRow + "-" + endRow,
-                    current.toString()
-                ));
-                if (chunks.size() >= maxChunksPerDocument) {
-                    return List.copyOf(chunks);
-                }
-                current = new StringBuilder(header);
-                startRow = currentRow;
-            }
-            current.append('\n').append(row);
-        }
-        if (current.length() > header.length() && chunks.size() < maxChunksPerDocument) {
-            chunks.add(new ParsedChunk(
-                chunks.size(),
-                "Rows " + startRow + "-" + currentRow,
-                current.toString()
-            ));
-        }
-        return List.copyOf(chunks);
-    }
-
-    /**
-     * RFC 4180 records. Quoted fields keep commas, newlines, and doubled quotes.
-     * Each record is the original text, without the terminating newline.
-     */
-    static List<String> csvRecords(String text) {
-        List<String> records = new ArrayList<>();
-        boolean inQuotes = false;
-        int recordStart = 0;
-        for (int index = 0; index < text.length(); index++) {
-            char currentChar = text.charAt(index);
-            if (currentChar == '"') {
-                if (inQuotes && index + 1 < text.length() && text.charAt(index + 1) == '"') {
-                    index++;
-                } else {
-                    inQuotes = !inQuotes;
-                }
-                continue;
-            }
-            if (currentChar == '\n' && !inQuotes) {
-                records.add(text.substring(recordStart, index));
-                recordStart = index + 1;
-            }
-        }
-        if (recordStart < text.length() || inQuotes) {
-            records.add(text.substring(recordStart));
-        }
-        return records;
     }
 
     private static String firstMarkdownHeading(String body) {

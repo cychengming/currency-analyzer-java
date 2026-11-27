@@ -20,15 +20,34 @@ class KnowledgeRetrieverTests {
     private final KnowledgeRetriever retriever = new KnowledgeRetriever(fixtureLibrary);
 
     @Test
-    void classpathLibraryLoadsBuiltInGuidesOnly() {
+    void classpathLibraryLoadsBuiltInGuidesStrategyCardsAndScenariosOnly() {
         KnowledgeLibrary builtIn = new KnowledgeLibrary();
 
         assertFalse(builtIn.notes().isEmpty());
-        assertTrue(builtIn.notes().stream().allMatch(note -> note.path().startsWith("knowledge/guides/")));
+        assertTrue(builtIn.notes().stream().allMatch(note ->
+            note.path().startsWith("knowledge/guides/")
+                || note.path().startsWith("knowledge/strategies/")
+                || note.path().startsWith("knowledge/scenarios/")
+        ));
         assertTrue(builtIn.notes().stream().anyMatch(note -> note.title().contains("User Guide")));
+        assertTrue(builtIn.notes().stream().anyMatch(note -> note.title().contains("Carver / AQR")));
+        assertEquals(
+            4,
+            builtIn.notes().stream().filter(note -> note.path().startsWith("knowledge/scenarios/")).count()
+        );
         assertTrue(builtIn.notes().stream().noneMatch(note ->
             note.path().contains("/concepts/") || note.path().contains("/entities/") || note.path().contains("/journal/")
         ));
+
+        KnowledgeRetriever builtInRetriever = new KnowledgeRetriever(builtIn);
+        assertTrue(
+            builtInRetriever.retrieve("What should I do before FOMC if volatility spikes?", 4).stream()
+                .anyMatch(note -> note.path().contains("macro-and-volatility-shocks.md"))
+        );
+        assertTrue(
+            builtInRetriever.retrieve("How do I handle hitting daily_risk_limit_pct after a losing streak?", 4).stream()
+                .anyMatch(note -> note.path().contains("risk-and-drawdown-emergencies.md"))
+        );
     }
 
     @Test

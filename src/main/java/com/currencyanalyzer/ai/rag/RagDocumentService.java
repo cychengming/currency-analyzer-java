@@ -574,7 +574,7 @@ public class RagDocumentService {
 
     private void validatePayload(String filename, byte[] rawBytes) {
         if (!documentParser.supports(filename)) {
-            throw new IllegalArgumentException("Unsupported file type. Supported formats: .md, .txt, .csv");
+            throw new IllegalArgumentException("Unsupported file type. Supported formats: .md, .txt");
         }
         if (rawBytes == null || rawBytes.length == 0) {
             throw new IllegalArgumentException("Uploaded file must not be empty");

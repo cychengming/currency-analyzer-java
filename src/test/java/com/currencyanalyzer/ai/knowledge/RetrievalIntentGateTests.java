@@ -56,6 +56,18 @@ class RetrievalIntentGateTests {
             "Explain EUR/USD carry trade theory",
             "Explain EUR/USD carry trade theory"
         ));
+        assertTrue(RetrievalIntentGate.shouldPreRetrieve(
+            "USD/JPY volatility spiked before FOMC, what should I do with my stop loss?",
+            "USD/JPY volatility spiked before FOMC, what should I do with my stop loss?"
+        ));
+        assertTrue(RetrievalIntentGate.shouldPreRetrieve(
+            "EUR/USD drawdown hit my daily risk limit, how do I handle this?",
+            "EUR/USD drawdown hit my daily risk limit, how do I handle this?"
+        ));
+        assertTrue(RetrievalIntentGate.shouldPreRetrieve(
+            "USD/JPY 跳空暴跌触及止损我该怎么办？",
+            "USD/JPY 跳空暴跌触及止损我该怎么办？"
+        ));
         assertTrue(RetrievalIntentGate.shouldPreRetrieve(null, "fallback query"));
     }
 }

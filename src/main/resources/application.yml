@@ -95,6 +95,9 @@ app:
     # Matches the dashboard refresh interval. Concurrent viewers share one upstream fetch.
     live-cache-ttl-seconds: ${MARKET_LIVE_CACHE_TTL_SECONDS:60}
     historical-cache-ttl-seconds: ${MARKET_HISTORICAL_CACHE_TTL_SECONDS:300}
+    ohlc-backfill-days: ${MARKET_OHLC_BACKFILL_DAYS:3650}
+    incremental-sync-enabled: ${MARKET_INCREMENTAL_SYNC_ENABLED:true}
+    incremental-sync-cron: ${MARKET_INCREMENTAL_SYNC_CRON:0 15 17 * * MON-FRI}
   storage:
     provider: ${STORAGE_PROVIDER:gcs}
     local-directory: ${LOCAL_STORAGE_DIR:${user.home}/.cache/currency-analyzer/uploads}
