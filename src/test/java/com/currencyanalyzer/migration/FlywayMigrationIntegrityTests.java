@@ -89,10 +89,10 @@ class FlywayMigrationIntegrityTests {
         Integer pipelineTables = jdbcTemplate.queryForObject(
             """
             SELECT COUNT(*) FROM information_schema.tables
-            WHERE table_name IN ('ohlc_history', 'policy_rate_history', 'pipeline_backtest_runs')
+            WHERE table_name IN ('ohlc_history', 'policy_rate_history', 'pipeline_backtest_runs', 'user_trade_settings')
             """,
             Integer.class
         );
-        assertEquals(3, pipelineTables);
+        assertEquals(4, pipelineTables);
     }
 }

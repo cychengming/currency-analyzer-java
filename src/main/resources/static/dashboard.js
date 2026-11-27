@@ -84,7 +84,7 @@ function formatSyncTime(value) {
         return 'Waiting for first sync';
     }
 
-    return value.toLocaleTimeString([], {
+    return value.toLocaleTimeString('en-US', {
         hour: '2-digit',
         minute: '2-digit',
         second: '2-digit'
@@ -684,6 +684,143 @@ function loadPages() {
             </div>
         </div>
 
+        <!-- 5-Stage Master Pipeline & Arena Page -->
+        <div id="masterPipeline" class="page page-shell">
+            <div class="card">
+                <div class="page-intro">
+                    <div class="page-intro-copy">
+                        <div class="page-eyebrow">Master-as-Code · 5-Stage Pipeline</div>
+                        <div class="page-heading">Benchmark Trend + Carry Spine &amp; Master Arena</div>
+                        <div class="page-subtext">Simulate multi-pair FX &amp; Metals portfolios with NY 5:00 PM aligned bars, mandatory 252-bar warm-up, 10% inertia buffer, Day t+1 Open fills, 3x Wednesday rollover, and explicit Spot vs. Carry P&amp;L attribution.</div>
+                    </div>
+                </div>
+
+                <div class="mp-stage-ribbon">
+                    <div class="mp-stage-step"><strong>Stage 1</strong><span>NY 5pm OHLC + Policy Rates</span></div>
+                    <div class="mp-stage-step"><strong>Stage 2</strong><span>Stateless Signal [-1..+1]</span></div>
+                    <div class="mp-stage-step"><strong>Stage 3</strong><span>Vol Sizer + 10% Inertia + USD Cap</span></div>
+                    <div class="mp-stage-step"><strong>Stage 4</strong><span>t+1 Open Fill + 3x Wed Carry</span></div>
+                    <div class="mp-stage-step"><strong>Stage 5</strong><span>USD Ledger (Spot vs. Carry)</span></div>
+                </div>
+
+                <div id="mpNotice" class="inline-banner" style="display:none; margin-bottom: 14px;"></div>
+
+                <div class="form-grid-3">
+                    <div class="form-group">
+                        <label for="mpProfileSelect">Primary Master Profile</label>
+                        <select id="mpProfileSelect"></select>
+                    </div>
+                    <div class="form-group">
+                        <label for="mpDays">History Window (calendar days)</label>
+                        <input type="number" id="mpDays" min="300" max="3650" step="30" value="1260">
+                    </div>
+                    <div class="form-group">
+                        <label for="mpEquity">Initial Equity (USD)</label>
+                        <input type="number" id="mpEquity" min="1000" step="1000" value="100000">
+                    </div>
+                    <div class="form-group">
+                        <label for="mpTargetVol">Portfolio Vol Target (%)</label>
+                        <input type="number" id="mpTargetVol" min="1" max="50" step="0.5" value="10">
+                    </div>
+                    <div class="form-group">
+                        <label for="mpClusterCap">Max Net USD Cluster Cap (× Equity)</label>
+                        <input type="number" id="mpClusterCap" min="0.5" max="5.0" step="0.1" value="1.5">
+                    </div>
+                    <div class="form-group">
+                        <label for="mpInertiaPct">Rebalance Inertia Buffer (%)</label>
+                        <input type="number" id="mpInertiaPct" min="0" max="50" step="1" value="10">
+                    </div>
+                </div>
+
+                <div style="margin-top: 10px;">
+                    <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; margin-bottom:8px; flex-wrap:wrap;">
+                        <label style="margin:0;">Portfolio Basket (G10 FX + Spot Metals)</label>
+                        <div style="display:flex; gap:8px;">
+                            <button type="button" class="app-link-btn" onclick="selectAllMasterPipelinePairs('core')">Core 5 Basket</button>
+                            <button type="button" class="app-link-btn" onclick="selectAllMasterPipelinePairs('all')">Select All 9</button>
+                        </div>
+                    </div>
+                    <div class="mkt-cat-pills" id="mpPairPills"></div>
+                </div>
+
+                <div class="panel-toolbar" style="margin-top: 16px;">
+                    <label class="app-check-chip">
+                        <input type="checkbox" id="mpEnableCarry" checked>
+                        <span>Include Central-Bank Carry &amp; Broker Financing Markup (1.0%/yr)</span>
+                    </label>
+                    <div style="display:flex; gap:10px;">
+                        <button type="button" class="btn-success" style="width:auto;" id="mpRunBtn" onclick="runMasterPipelineBacktest()">Run 5-Stage Master Arena</button>
+                        <button type="button" class="btn-secondary" style="width:auto;" onclick="switchPage('backtest')">Single-Pair Rule Builder →</button>
+                    </div>
+                </div>
+            </div>
+
+            <div id="mpResultsWrap" hidden>
+                <div class="card" style="margin-top: 16px;">
+                    <h2 class="card-title">Stage 5 Attribution: Spot Trend Alpha vs. Interest-Rate Carry</h2>
+                    <div id="mpAttributionKpis" class="mp-kpi-grid"></div>
+                    <div class="chart-container" style="height: 340px; margin-top: 16px;">
+                        <canvas id="mpAttributionChart"></canvas>
+                    </div>
+                </div>
+
+                <div class="card" style="margin-top: 16px;">
+                    <h2 class="card-title">Master Arena Leaderboard (Identical Aligned Bars &amp; Friction)</h2>
+                    <div class="table-wrap">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>Master Strategy Profile</th>
+                                    <th>Net Sharpe</th>
+                                    <th>Spot Sharpe</th>
+                                    <th>CAGR</th>
+                                    <th>Max DD</th>
+                                    <th>Spot P&amp;L</th>
+                                    <th>Carry P&amp;L</th>
+                                    <th>Friction</th>
+                                    <th>Fills / Inertia Skips</th>
+                                </tr>
+                            </thead>
+                            <tbody id="mpArenaTableBody"></tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <div class="card" style="margin-top: 16px;">
+                    <div class="panel-toolbar" style="margin-bottom: 12px;">
+                        <div>
+                            <h2 class="card-title" style="margin-bottom: 2px;">5-Stage Execution Trace Inspector (Day t Signal → Day t+1 Open Fill)</h2>
+                            <p class="muted-copy">Verify zero look-ahead fills, 10% inertia skips, USD cluster caps, and Wednesday 3x swap rollovers.</p>
+                        </div>
+                        <select id="mpTracePairFilter" style="width: auto; min-width: 160px;"></select>
+                    </div>
+                    <div class="table-wrap">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>Signal (t) → Fill (t+1)</th>
+                                    <th>Pair</th>
+                                    <th>S2 Signal</th>
+                                    <th>Pair Vol</th>
+                                    <th>S3 Target USD</th>
+                                    <th>Stage 3 Guard</th>
+                                    <th>S4 t+1 Open</th>
+                                    <th>Rollover Carry</th>
+                                    <th>Daily Spot P&amp;L</th>
+                                </tr>
+                            </thead>
+                            <tbody id="mpTracesTableBody"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card" style="margin-top: 16px;">
+                <h2 class="card-title">My Recent Saved Arena Runs</h2>
+                <div id="mpRecentRunsList"><div class="muted-copy">Loading recent runs...</div></div>
+            </div>
+        </div>
+
         <!-- Backtest Page -->
         <div id="backtest" class="page page-shell">
             <div class="card">
@@ -898,6 +1035,39 @@ function loadPages() {
 
                         <div id="tradeDiaryStatus" class="loading" style="display:none; margin-top: 12px;"></div>
                     </div>
+                </div>
+            </div>
+
+            <div class="card" style="margin-top: 16px;">
+                <div class="panel-toolbar" style="margin-bottom: 10px;">
+                    <div>
+                        <h2 class="card-title" style="margin-bottom: 2px;">Live Master Target Sheet (Stages 1–3 Spine)</h2>
+                        <p class="muted-copy">Compare your discretionary paper trades against today's volatility-targeted Master Spine allocations, carry yield, and net-USD cluster headroom.</p>
+                    </div>
+                    <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                        <select id="liveTargetProfileSelect" style="width:auto; min-width: 220px;" onchange="if (typeof loadLiveMasterTargets === 'function') loadLiveMasterTargets();"></select>
+                        <button type="button" class="btn-secondary app-compact-btn" onclick="if (typeof loadLiveMasterTargets === 'function') loadLiveMasterTargets();">Refresh Targets</button>
+                    </div>
+                </div>
+                <div id="liveMasterClusterSummary" class="mp-cluster-strip"></div>
+                <div class="table-wrap" style="margin-top: 12px;">
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th>Pair</th>
+                                <th>Close</th>
+                                <th>Master Signal</th>
+                                <th>Pair Vol</th>
+                                <th>Net Carry</th>
+                                <th>Target Notional</th>
+                                <th>10% Inertia Band</th>
+                                <th>My Book vs. Master</th>
+                            </tr>
+                        </thead>
+                        <tbody id="liveMasterTargetsBody">
+                            <tr><td colspan="8" class="loading">Loading live Master Spine targets...</td></tr>
+                        </tbody>
+                    </table>
                 </div>
             </div>
 
@@ -1212,6 +1382,12 @@ async function refreshDashboardNow() {
 
 window.handleDashboardPageChange = function handleDashboardPageChange(page) {
     writeDashboardState({ activePage: page });
+    if (page === 'masterPipeline' && typeof initMasterPipelinePage === 'function') {
+        initMasterPipelinePage();
+    }
+    if (page === 'trade' && typeof initTradePage === 'function') {
+        initTradePage();
+    }
     if (page === 'knowledge' && typeof initKnowledgePage === 'function') {
         initKnowledgePage();
     }
@@ -1503,7 +1679,7 @@ async function fetchHistoricalOHLCFor(pair, days) {
         const encodedPair = encodeURIComponent(pair);
         const d = Number(days);
         if (!pair || !Number.isFinite(d) || d <= 0) return [];
-        const result = await fetchAPI(`/api/historical-ohlc/${encodedPair}/${d}`);
+        const result = await fetchAPI(`/api/historical-ohlc?pair=${encodedPair}&days=${d}`);
         if (!Array.isArray(result)) return [];
         return result.filter(item =>
             item && item.date &&
@@ -2268,10 +2444,12 @@ async function testEmail() {
 async function loadAlertPreferences() {
     const preferences = await fetchAPI('/api/alerts/preferences');
     const conditions = await fetchAPI('/api/alerts/conditions');
+    const backtestConditions = await fetchAPI('/api/backtest/conditions');
     if (preferences && conditions) {
-        btConditions = conditions;
         renderAlertPreferences(preferences, conditions);
-        // Backtest uses conditions for rule configuration
+    }
+    btConditions = backtestConditions || conditions;
+    if (btConditions) {
         initBacktestControls();
     }
 }
