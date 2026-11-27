@@ -3,6 +3,7 @@ package com.currencyanalyzer.web;
 import com.currencyanalyzer.auth.AuthenticationService;
 import com.currencyanalyzer.auth.KnowledgeAdminService;
 import com.currencyanalyzer.auth.LoginAttemptLimiter;
+import com.currencyanalyzer.auth.PersistentSessionService;
 import com.currencyanalyzer.auth.UserManagementService;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import jakarta.servlet.http.HttpServletRequest;
@@ -41,6 +42,7 @@ public class AuthController {
     private final AuthenticationService authenticationService;
     private final CsrfTokenRepository csrfTokenRepository;
     private final LoginAttemptLimiter loginAttemptLimiter;
+    private final PersistentSessionService persistentSessionService;
     private final boolean registrationEnabled;
     private final SecurityContextRepository securityContextRepository =
         new HttpSessionSecurityContextRepository();
@@ -51,6 +53,7 @@ public class AuthController {
         AuthenticationService authenticationService,
         CsrfTokenRepository csrfTokenRepository,
         LoginAttemptLimiter loginAttemptLimiter,
+        PersistentSessionService persistentSessionService,
         @Value("${app.auth.registration-enabled:true}") boolean registrationEnabled
     ) {
         this.userManagementService = userManagementService;
@@ -58,6 +61,7 @@ public class AuthController {
         this.authenticationService = authenticationService;
         this.csrfTokenRepository = csrfTokenRepository;
         this.loginAttemptLimiter = loginAttemptLimiter;
+        this.persistentSessionService = persistentSessionService;
         this.registrationEnabled = registrationEnabled;
     }
 
@@ -137,6 +141,7 @@ public class AuthController {
             SecurityContextHolder.setContext(context);
             securityContextRepository.saveContext(context, request, response);
             request.getSession(true).setAttribute("username", authentication.getName());
+            persistentSessionService.issueSessionCookie(response, authentication.getName());
             return ResponseEntity.ok(Map.of("success", true, "message", "Login successful"));
         } catch (DisabledException exception) {
             log.info("Blocked login for disabled username={}", username);
@@ -151,6 +156,7 @@ public class AuthController {
     @PostMapping("/change-password")
     public ResponseEntity<Map<String, Object>> changePassword(
         Authentication authentication,
+        HttpServletResponse response,
         @RequestBody(required = false) ChangePasswordRequest request
     ) {
         if (authentication == null || !authentication.isAuthenticated() || authentication.getName() == null) {
@@ -161,16 +167,18 @@ public class AuthController {
             request == null ? null : request.currentPassword(),
             request == null ? null : request.newPassword()
         );
+        persistentSessionService.issueSessionCookie(response, authentication.getName());
         return ResponseEntity.ok(Map.of("success", true, "message", "Password updated"));
     }
 
     @PostMapping("/logout")
-    public Map<String, Object> logout(HttpServletRequest request) {
+    public Map<String, Object> logout(HttpServletRequest request, HttpServletResponse response) {
         HttpSession session = request.getSession(false);
         if (session != null) {
             session.invalidate();
         }
         SecurityContextHolder.clearContext();
+        persistentSessionService.clearSessionCookie(response);
         return Map.of("success", true, "message", "Logged out");
     }
 
