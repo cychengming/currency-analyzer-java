@@ -90,7 +90,7 @@ public class WebSecurityConfig {
                 UsernamePasswordAuthenticationFilter.class
             )
             .authorizeHttpRequests(authorize -> authorize
-                .dispatcherTypeMatchers(DispatcherType.ERROR).permitAll()
+                .dispatcherTypeMatchers(DispatcherType.ERROR, DispatcherType.ASYNC).permitAll()
                 .requestMatchers(
                     "/",
                     "/index.html",
