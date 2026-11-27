@@ -1,6 +1,5 @@
 package com.currencyanalyzer.quant.pipeline;
 
-import java.time.DayOfWeek;
 import java.time.LocalDate;
 
 /**
@@ -56,13 +55,10 @@ public class ExecutionAndCarrySimulator {
     }
 
     static int rolloverDaysFor(LocalDate date) {
-        DayOfWeek day = date.getDayOfWeek();
-        if (day == DayOfWeek.WEDNESDAY) {
-            return 3;
-        }
-        if (day == DayOfWeek.SATURDAY || day == DayOfWeek.SUNDAY) {
-            return 0;
-        }
-        return 1;
+        return switch (date.getDayOfWeek()) {
+            case WEDNESDAY -> 3;
+            case SATURDAY, SUNDAY -> 0;
+            default -> 1;
+        };
     }
 }

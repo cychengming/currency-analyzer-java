@@ -8,11 +8,11 @@ import java.util.Map;
  */
 public class IdentityRegimeOverlay implements RegimeRiskOverlay {
 
-    public static final String ID = "identity";
+    public static final String OVERLAY_ID = "identity";
 
     @Override
     public String id() {
-        return ID;
+        return OVERLAY_ID;
     }
 
     @Override

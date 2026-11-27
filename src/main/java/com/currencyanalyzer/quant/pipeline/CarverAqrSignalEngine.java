@@ -14,7 +14,7 @@ import java.util.List;
  */
 public class CarverAqrSignalEngine implements SignalEngine {
 
-    public static final String ID = "carver-aqr-spine";
+    public static final String ENGINE_ID = "carver-aqr-spine";
     private static final double TRADING_DAYS_PER_YEAR = 252.0;
     private static final double TREND_WEIGHT = 0.70;
     private static final double CARRY_WEIGHT = 0.30;
@@ -32,7 +32,7 @@ public class CarverAqrSignalEngine implements SignalEngine {
 
     @Override
     public String id() {
-        return ID;
+        return ENGINE_ID;
     }
 
     @Override

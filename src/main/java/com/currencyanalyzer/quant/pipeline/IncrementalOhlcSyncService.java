@@ -10,7 +10,6 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
 import java.time.Clock;
-import java.time.DayOfWeek;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -69,10 +68,17 @@ public class IncrementalOhlcSyncService {
         LocalDate candidate = nyNow.toLocalTime().isBefore(NY_CLOSE_TIME)
             ? nyNow.toLocalDate().minusDays(1)
             : nyNow.toLocalDate();
-        while (candidate.getDayOfWeek() == DayOfWeek.SATURDAY || candidate.getDayOfWeek() == DayOfWeek.SUNDAY) {
+        while (isWeekend(candidate)) {
             candidate = candidate.minusDays(1);
         }
         return candidate;
+    }
+
+    private static boolean isWeekend(LocalDate date) {
+        return switch (date.getDayOfWeek()) {
+            case SATURDAY, SUNDAY -> true;
+            default -> false;
+        };
     }
 
     public OhlcSyncReport syncPair(String rawPair) {

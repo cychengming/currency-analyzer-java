@@ -12,7 +12,7 @@ import java.util.Map;
  */
 public class DrawdownAndVolSpikeOverlay implements RegimeRiskOverlay {
 
-    public static final String ID = "drawdown-vol-throttle";
+    public static final String OVERLAY_ID = "drawdown-vol-throttle";
 
     private final double softDrawdownPct;
     private final double hardDrawdownPct;
@@ -37,7 +37,7 @@ public class DrawdownAndVolSpikeOverlay implements RegimeRiskOverlay {
 
     @Override
     public String id() {
-        return ID;
+        return OVERLAY_ID;
     }
 
     @Override

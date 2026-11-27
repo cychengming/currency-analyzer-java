@@ -10,7 +10,7 @@ import java.util.List;
  */
 public class DonchianBreakoutSignalEngine implements SignalEngine {
 
-    public static final String ID = "turtle-donchian";
+    public static final String ENGINE_ID = "turtle-donchian";
 
     private final int fastWindow;
     private final int slowWindow;
@@ -28,7 +28,7 @@ public class DonchianBreakoutSignalEngine implements SignalEngine {
 
     @Override
     public String id() {
-        return ID;
+        return ENGINE_ID;
     }
 
     @Override

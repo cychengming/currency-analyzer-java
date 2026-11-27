@@ -12,7 +12,7 @@ import java.util.List;
  */
 public class DruckenmillerRateImpulseSignalEngine implements SignalEngine {
 
-    public static final String ID = "druckenmiller-rate-impulse";
+    public static final String ENGINE_ID = "druckenmiller-rate-impulse";
 
     private final int impulseDays;
     private final int trendSmaDays;
@@ -30,7 +30,7 @@ public class DruckenmillerRateImpulseSignalEngine implements SignalEngine {
 
     @Override
     public String id() {
-        return ID;
+        return ENGINE_ID;
     }
 
     @Override

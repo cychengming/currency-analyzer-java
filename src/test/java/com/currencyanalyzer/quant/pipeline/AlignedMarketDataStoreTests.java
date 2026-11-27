@@ -109,7 +109,7 @@ class AlignedMarketDataStoreTests {
             repo.saveBacktestRun(
                 runId,
                 "trader1",
-                CarverAqrSignalEngine.ID,
+                CarverAqrSignalEngine.ENGINE_ID,
                 LocalDate.of(2024, 1, 1),
                 LocalDate.of(2024, 12, 31),
                 "{}",
@@ -119,7 +119,7 @@ class AlignedMarketDataStoreTests {
             List<AlignedMarketDataRepository.PipelineRunRecord> runs = repo.findRunsByUsername("trader1", 10);
             assertThat(runs).hasSize(1);
             assertThat(runs.getFirst().id()).isEqualTo(runId);
-            assertThat(runs.getFirst().profileId()).isEqualTo(CarverAqrSignalEngine.ID);
+            assertThat(runs.getFirst().profileId()).isEqualTo(CarverAqrSignalEngine.ENGINE_ID);
 
             // Empty / invalid guard branches
             assertThat(repo.upsertOhlcBars("", "YAHOO", List.of(), FIXED_CLOCK.instant())).isZero();

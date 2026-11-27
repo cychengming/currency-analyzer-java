@@ -41,8 +41,8 @@ public class MasterPipelineConfiguration {
         DrawdownAndVolSpikeOverlay guardedOverlay = new DrawdownAndVolSpikeOverlay();
 
         Map<String, MasterStrategyProfile> profiles = new LinkedHashMap<>();
-        profiles.put(CarverAqrSignalEngine.ID, new MasterStrategyProfile(
-            CarverAqrSignalEngine.ID,
+        profiles.put(CarverAqrSignalEngine.ENGINE_ID, new MasterStrategyProfile(
+            CarverAqrSignalEngine.ENGINE_ID,
             carver.displayName(),
             carver,
             identityOverlay
@@ -53,14 +53,14 @@ public class MasterPipelineConfiguration {
             carver,
             guardedOverlay
         ));
-        profiles.put(DonchianBreakoutSignalEngine.ID, new MasterStrategyProfile(
-            DonchianBreakoutSignalEngine.ID,
+        profiles.put(DonchianBreakoutSignalEngine.ENGINE_ID, new MasterStrategyProfile(
+            DonchianBreakoutSignalEngine.ENGINE_ID,
             donchian.displayName(),
             donchian,
             identityOverlay
         ));
-        profiles.put(DruckenmillerRateImpulseSignalEngine.ID, new MasterStrategyProfile(
-            DruckenmillerRateImpulseSignalEngine.ID,
+        profiles.put(DruckenmillerRateImpulseSignalEngine.ENGINE_ID, new MasterStrategyProfile(
+            DruckenmillerRateImpulseSignalEngine.ENGINE_ID,
             druckenmiller.displayName(),
             druckenmiller,
             guardedOverlay

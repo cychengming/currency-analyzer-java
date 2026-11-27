@@ -159,10 +159,10 @@ class FxMasterPipelineTests {
         );
         Map<String, MasterStrategyProfile> profiles = factory.masterStrategyProfiles();
         assertThat(profiles).containsKeys(
-            CarverAqrSignalEngine.ID,
+            CarverAqrSignalEngine.ENGINE_ID,
             "carver-guarded-overlay",
-            DonchianBreakoutSignalEngine.ID,
-            DruckenmillerRateImpulseSignalEngine.ID
+            DonchianBreakoutSignalEngine.ENGINE_ID,
+            DruckenmillerRateImpulseSignalEngine.ENGINE_ID
         );
 
         // Regime 1: Sustained hiking trend + positive carry -> positive Spot & positive Carry attribution
@@ -170,10 +170,10 @@ class FxMasterPipelineTests {
         List<FxDailyBar> goldTrend = trendingSeries("GOLD/USD", LocalDate.of(2022, 1, 3), 420, 1850.0, 1.40, 0.0, 5.25);
 
         PipelineBacktestResult carverResult = runner.run(
-            CarverAqrSignalEngine.ID,
+            CarverAqrSignalEngine.ENGINE_ID,
             Map.of("USD/JPY", usdJpyTrend, "GOLD/USD", goldTrend),
-            profiles.get(CarverAqrSignalEngine.ID).signalEngine(),
-            profiles.get(CarverAqrSignalEngine.ID).riskOverlay(),
+            profiles.get(CarverAqrSignalEngine.ENGINE_ID).signalEngine(),
+            profiles.get(CarverAqrSignalEngine.ENGINE_ID).riskOverlay(),
             PipelineConfig.defaults()
         );
         assertThat(carverResult.summary().totalSpotPnlUsd()).isPositive();
@@ -181,17 +181,17 @@ class FxMasterPipelineTests {
         assertThat(carverResult.summary().netSharpeRatio()).isPositive();
 
         PipelineBacktestResult druckenResult = runner.run(
-            DruckenmillerRateImpulseSignalEngine.ID,
+            DruckenmillerRateImpulseSignalEngine.ENGINE_ID,
             Map.of("USD/JPY", usdJpyTrend, "GOLD/USD", goldTrend),
-            profiles.get(DruckenmillerRateImpulseSignalEngine.ID).signalEngine(),
-            profiles.get(DruckenmillerRateImpulseSignalEngine.ID).riskOverlay(),
+            profiles.get(DruckenmillerRateImpulseSignalEngine.ENGINE_ID).signalEngine(),
+            profiles.get(DruckenmillerRateImpulseSignalEngine.ENGINE_ID).riskOverlay(),
             PipelineConfig.defaults()
         );
         PipelineBacktestResult donchianResult = runner.run(
-            DonchianBreakoutSignalEngine.ID,
+            DonchianBreakoutSignalEngine.ENGINE_ID,
             Map.of("USD/JPY", usdJpyTrend, "GOLD/USD", goldTrend),
-            profiles.get(DonchianBreakoutSignalEngine.ID).signalEngine(),
-            profiles.get(DonchianBreakoutSignalEngine.ID).riskOverlay(),
+            profiles.get(DonchianBreakoutSignalEngine.ENGINE_ID).signalEngine(),
+            profiles.get(DonchianBreakoutSignalEngine.ENGINE_ID).riskOverlay(),
             PipelineConfig.defaults()
         );
         assertThat(druckenResult.summary().finalEquityUsd()).isPositive();
@@ -200,9 +200,9 @@ class FxMasterPipelineTests {
         // Regime 2: Carry unwind crash -> DrawdownAndVolSpikeOverlay limits drawdown vs unthrottled Carver spine
         List<FxDailyBar> unwindBars = carryUnwindSeries("USD/JPY", LocalDate.of(2023, 6, 1), 360);
         PipelineBacktestResult unguarded = runner.run(
-            CarverAqrSignalEngine.ID,
+            CarverAqrSignalEngine.ENGINE_ID,
             Map.of("USD/JPY", unwindBars),
-            profiles.get(CarverAqrSignalEngine.ID).signalEngine(),
+            profiles.get(CarverAqrSignalEngine.ENGINE_ID).signalEngine(),
             new IdentityRegimeOverlay(),
             new PipelineConfig(100_000.0, 0.15, 1.50, 0.10, 0.01, true, 50)
         );
@@ -270,7 +270,7 @@ class FxMasterPipelineTests {
         assertThat(new PipelineBacktestResult("p", d, d, PortfolioLedger.summarize(100_000.0, List.of(), 0, 0, 0.0), null, null).equityCurve()).isEmpty();
 
         DrawdownAndVolSpikeOverlay overlay = new DrawdownAndVolSpikeOverlay();
-        assertThat(overlay.id()).isEqualTo(DrawdownAndVolSpikeOverlay.ID);
+        assertThat(overlay.id()).isEqualTo(DrawdownAndVolSpikeOverlay.OVERLAY_ID);
         assertThat(overlay.riskMultiplier(d, null, Map.of())).isEqualTo(1.0);
         assertThat(overlay.riskMultiplier(d, new PortfolioState(d, 85_000.0, 100_000.0, -15.0, Map.of(), Map.of()), Map.of("EUR/USD", 0.24, "USD/JPY", 0.20)))
             .isLessThan(0.70);
@@ -286,7 +286,14 @@ class FxMasterPipelineTests {
         assertThat(druck.computeSignal(null, downBars, 270)).isNegative();
 
         IdentityRegimeOverlay identity = new IdentityRegimeOverlay();
-        assertThat(identity.id()).isEqualTo(IdentityRegimeOverlay.ID);
+        assertThat(identity.id()).isEqualTo(IdentityRegimeOverlay.OVERLAY_ID);
+    }
+
+    private static boolean isWeekday(LocalDate date) {
+        return switch (date.getDayOfWeek()) {
+            case SATURDAY, SUNDAY -> false;
+            default -> true;
+        };
     }
 
     private static List<FxDailyBar> trendingSeries(
@@ -303,7 +310,7 @@ class FxMasterPipelineTests {
         double price = startPrice;
         int added = 0;
         while (added < days) {
-            if (date.getDayOfWeek() != DayOfWeek.SATURDAY && date.getDayOfWeek() != DayOfWeek.SUNDAY) {
+            if (isWeekday(date)) {
                 double wobble = ((added % 5) - 2) * (startPrice * 0.0015);
                 double open = price;
                 double close = Math.max(0.01, price + dailyDrift + wobble);
@@ -330,7 +337,7 @@ class FxMasterPipelineTests {
         int added = 0;
         double prevClose = anchor;
         while (added < days) {
-            if (date.getDayOfWeek() != DayOfWeek.SATURDAY && date.getDayOfWeek() != DayOfWeek.SUNDAY) {
+            if (isWeekday(date)) {
                 double open = prevClose;
                 double close = anchor + Math.sin(added * 0.35) * amplitude;
                 double high = Math.max(open, close) * 1.004;
@@ -350,7 +357,7 @@ class FxMasterPipelineTests {
         double price = 140.0;
         int added = 0;
         while (added < days) {
-            if (date.getDayOfWeek() != DayOfWeek.SATURDAY && date.getDayOfWeek() != DayOfWeek.SUNDAY) {
+            if (isWeekday(date)) {
                 double open = price;
                 double delta = added < 290 ? 0.08 + ((added % 4) - 1.5) * 0.10 : -0.85;
                 double close = Math.max(90.0, price + delta);
