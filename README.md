@@ -42,6 +42,42 @@ The API key is never sent to the browser. Spring AI calls DeepSeek and exposes r
 
 Notes are searched by meaning with a local multilingual embedding model (`paraphrase-multilingual-MiniLM-L12-v2`, about 120 MB). The model is downloaded on the first note search into `AI_EMBEDDING_CACHE` (by default `~/.cache/currency-analyzer/embeddings`) and then reused. If that download fails, the assistant falls back to keyword overlap. Set `AI_KNOWLEDGE_RETRIEVAL=keyword` to skip the download.
 
+### Enterprise MCP Client (External MCP Servers)
+
+AskAI can optionally connect to external Model Context Protocol (MCP) servers over Streamable HTTP or SSE using `spring-ai-starter-mcp-client`, governed by a fail-closed security gateway (`com.currencyanalyzer.ai.mcp.client`):
+
+- Both Spring AI MCP discovery (`MCP_CLIENT_ENABLED`) and the gateway (`APP_MCP_CLIENT_ENABLED`) default to `false`. Raw `spring.ai.mcp.client.toolcallback.enabled` stays `false` so unguarded remote tools are never injected directly into the LLM prompt.
+- Configure external connections under `spring.ai.mcp.client.streamable-http.connections.<server>` and grant an explicit per-server policy under `app.ai.mcp.client.servers.<server>`:
+
+```yaml
+spring:
+  ai:
+    mcp:
+      client:
+        enabled: true
+        streamable-http:
+          connections:
+            macro-feed:
+              url: https://your-mcp-server.example.com
+              endpoint: /mcp
+
+app:
+  ai:
+    mcp:
+      client:
+        enabled: true
+        servers:
+          macro-feed:
+            enabled: true
+            allow-write-tools: false
+            allowed-tools:
+              - get_macro_calendar
+              - get_fred_series
+```
+
+- **Guardrails:** Wildcard `allowed-tools` (`*`) are ignored (fail-closed), remote tools are namespaced as `mcp_<server>__<tool>` to prevent built-in shadowing, mutating tools are blocked unless `allow-write-tools: true`, every server has a semaphore bulkhead, timeout, and sliding circuit breaker, and outputs are stripped of DSML and wrapped with `"untrusted": true`.
+- **Admin Inspection:** Authenticated `ROLE_ADMIN` users can inspect server states, circuit breakers, and active tools at `GET /api/ai/mcp/servers` and invalidate discovery caches via `POST /api/ai/mcp/servers/refresh`.
+
 ## Enable SonarQube Cloud
 
 1. Create or import the `cychengming_currency-analyzer-java` project in SonarQube Cloud.

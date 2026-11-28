@@ -1,8 +1,8 @@
 # AI Chat & RAG — Architecture Audit & Roadmap
 
 **Initial Review:** 2026-11-22  
-**Last Updated:** 2026-11-26 (post PR #20 on `feat/rag-phase1-hardening`)  
-**Scope:** `com.currencyanalyzer.ai.chat`, `ai.springai`, `ai.knowledge`, `ai.rag`, `ai.tools`, `storage`, `static/ai-chat.js`
+**Last Updated:** 2026-11-28 (Enterprise MCP Client Gateway on `feat/enterprise-mcp-client-gateway`)  
+**Scope:** `com.currencyanalyzer.ai.chat`, `ai.springai`, `ai.mcp.client`, `ai.knowledge`, `ai.rag`, `ai.tools`, `storage`, `static/ai-chat.js`
 
 ---
 
@@ -24,7 +24,7 @@ flowchart LR
     F --> CTX["UNTRUSTED REFERENCE CONTEXT (max 4 notes, 4000 chars)"]
     KR -. "RAG empty" .-> KL["KnowledgeLibrary fallback"]
     CTX --> LLM
-    LLM --> T["11 tools incl. search_notes (deduped via ToolUserContext)"]
+    LLM --> T["11 built-in tools + namespaced MCP Client Gateway tools (mcp_<server>__<tool>)"]
     T --> LLM
     LLM --> SSE["SSE (reasoning, tool_started/completed, text_delta) -> ai-chat.js"]
 ```
@@ -101,7 +101,26 @@ Severity: **High** · **Medium** · **Low**
 
 Tool-using turns execute at least **two** model calls inside `SpringAiChatRunner` (Round 1: tool selection; Round 2: answer synthesis). Before Phase 1, unconditional pre-retrieval routinely matched generic terms (`EUR/USD`, `rate`, `alert`) against guides and injected `500–1,200` tokens of `UNTRUSTED REFERENCE CONTEXT` that stayed in the prompt for **every round**—billing `1,000–2,400` unnecessary tokens against a `~3,850`-token 2-round baseline (**~21%–38%** total input overhead). Skipping pre-retrieval via `RetrievalIntentGate` on pure operational turns (while retaining on-demand `search_notes` and deduplicating attached `KnowledgeNote.path()` IDs through `ToolUserContext`) eliminates that repeated multi-round tax without losing recall on hybrid queries.
 
-### Phase 2 — Retrieval & Answer Quality *(Deferred — RAG Frozen at Phase 1)*
+### 4.2 Sequenced AI Assistant 4-PR Track *(Updated 2026-11-28)*
+
+| PR | Focus | Key Capabilities & Status |
+|---|---|---|
+| **PR 1 (Implemented)** | **Enterprise MCP Client Gateway** (`com.currencyanalyzer.ai.mcp.client`) | Fail-closed server registry (`spring-ai-starter-mcp-client`, `SYNC`, `toolcallback.enabled=false`), explicit `allowed-tools` (no wildcards), `mcp_<server>__<tool>` namespacing & anti-shadowing, read-only guard (`allow-write-tools=false` default), per-server `Semaphore` bulkhead, sliding `McpServerCircuitBreaker`, bounded network timeout, DSML stripping & OWASP LLM01 untrusted JSON envelope, Prometheus `currency_analyzer_mcp_client_*` metrics, and admin-only `/api/ai/mcp/servers` endpoints. |
+| **PR 2 (Next)** | **Parent-Child ("Small-to-Big") RAG + Local ONNX Cross-Encoder Reranker** | `V11` (`rag_parent_chunks`, `embedding_model`/`embedding_dim`, `doc_type`, `valid_until`), section-level parent + child chunking, bounded 2-thread platform pool for Pub/Sub `ingestNow`, pluggable `RagReranker` SPI with local ONNX cross-encoder (`Xenova/bge-reranker-base`, keeping Cloud Run at `2Gi` initially with RRF fallback), and `[1]..[n]` end-to-end UI citations. |
+| **PR 3** | **Conversation Window & Context Management** | `V12` rolling memory + pending action confirmations (`A5`), CJK-aware `ConversationContextAssembler` replacing the fixed `20`-message cutoff (`A6`), async non-thinking `ConversationSummaryService` with monotonic SQL guard, intra-turn tool output compaction, bilingual follow-up rewriting (`R8`), and single `SpringAiChatRunner` loop (`A4`). |
+| **PR 4** | **Spring AI MCP Server (`/mcp`)** | `V13` `user_api_tokens` (SHA-256 scoped Bearer tokens), dedicated stateless `/mcp/**` filter chain in `WebSecurityConfig`, read/write scope & RBAC enforcement, exposing deterministic quant & Master Pipeline tools plus Settings UI token management. |
+
+#### 4.3 Enterprise MCP Client Governance (`com.currencyanalyzer.ai.mcp.client`)
+
+External MCP servers are never auto-bound directly to the model (`spring.ai.mcp.client.toolcallback.enabled=false`). Instead, [McpClientToolGateway](file:///c:/Users/cyche/Documents/ChatGPT/currency-analyzer-java/src/main/java/com/currencyanalyzer/ai/mcp/client/McpClientToolGateway.java) wraps each configured `McpSyncClient` through six defense-in-depth controls:
+1. **Fail-Closed Allowlist:** Both `app.ai.mcp.client.enabled` and `app.ai.mcp.client.servers.<name>.enabled` default to `false`, empty `allowed-tools` denies every tool, and wildcard `"*"` entries are ignored.
+2. **Namespacing & Anti-Shadowing:** Remote tools are exposed as `mcp_<server>__<tool>` (capped at 64 chars) and rejected if they collide with any built-in tool name in `AssistantTools`.
+3. **Read-Only Default:** Mutating hints (`readOnlyHint=false`) or write-verb prefixes (`create_`, `update_`, `delete_`, `execute_`, etc.) are blocked unless `allow-write-tools=true`.
+4. **Resilience Isolation:** Each server enforces a `Semaphore` concurrency bulkhead (`4` default), virtual-thread hard timeout (`10s` default), and `McpServerCircuitBreaker` (`5` consecutive failures -> `30s` open cooldown -> single `HALF_OPEN` probe).
+5. **OWASP LLM01 Envelope:** Responses strip leaked DSML tags, truncate to `max-result-chars` (`4000` default), and wrap payloads inside `{"source":"external_mcp","server":"...","untrusted":true,...}`.
+6. **Observability & Admin Inspection:** Calls record compact metadata in `ai_tool_invocations`, emit Prometheus counters/timers (`currency_analyzer_mcp_client_calls_total`, `currency_analyzer_mcp_client_duration_seconds`), and expose health/cache-refresh to `ROLE_ADMIN` via `GET /api/ai/mcp/servers` and `POST /api/ai/mcp/servers/refresh`.
+
+### Phase 2 — Retrieval & Answer Quality *(Scheduled in AI Assistant PR 2)*
 1. **Cross-encoder reranker (R4 + R2 + R3):** Score the top 20–24 RRF candidates using `bge-reranker-v2-m3` (local ONNX or hosted rerank API) and calibrate the cutoff on reranker scores, retiring brittle magic boosts.
 2. **Parent/child small-to-big chunking (R1):** Index small child chunks (~150 tokens) for high-precision matching while injecting their parent section (~600–900 tokens) into prompt context, replacing `expandStrongDocuments`.
 3. **Versioned embedding upgrade (R5):** Add `embedding_model VARCHAR(128)` and `embedding_dim INTEGER` to `rag_chunks` (portable migration + PostgreSQL vector index migration) and benchmark `multilingual-e5-small` vs `bge-m3` against the golden set.

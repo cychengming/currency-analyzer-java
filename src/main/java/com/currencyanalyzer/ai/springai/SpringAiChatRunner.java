@@ -1,6 +1,7 @@
 package com.currencyanalyzer.ai.springai;
 
 import com.currencyanalyzer.ai.chat.AiMetrics;
+import com.currencyanalyzer.ai.mcp.client.McpClientToolGateway;
 import com.currencyanalyzer.ai.provider.AiProviderException;
 import org.springframework.ai.chat.metadata.Usage;
 import org.springframework.ai.chat.messages.AssistantMessage;
@@ -44,22 +45,65 @@ public class SpringAiChatRunner {
 
     private final ObjectProvider<ChatModel> chatModels;
     private final SpringAiMarketTools marketTools;
+    private final McpClientToolGateway mcpClientToolGateway;
     private final AiMetrics aiMetrics;
     private final ToolCallingManager toolCallingManager = ToolCallingManager.builder().build();
     private final String model;
     private final int maxOutputTokens;
-    private volatile List<ToolCallback> toolCallbacks;
+    private volatile List<ToolCallback> builtInToolCallbacks;
 
     @Autowired
     public SpringAiChatRunner(
         ObjectProvider<ChatModel> chatModels,
         SpringAiMarketTools marketTools,
         AiMetrics aiMetrics,
+        ObjectProvider<McpClientToolGateway> mcpGatewayProvider,
         @Value("${app.ai.model:deepseek-flash}") String model,
         @Value("${app.ai.max-output-tokens:8192}") int maxOutputTokens
     ) {
         this.chatModels = chatModels;
         this.marketTools = marketTools;
+        this.mcpClientToolGateway = mcpGatewayProvider == null ? null : mcpGatewayProvider.getIfAvailable();
+        this.aiMetrics = aiMetrics == null ? AiMetrics.noop() : aiMetrics;
+        this.model = model;
+        this.maxOutputTokens = maxOutputTokens;
+    }
+
+    public SpringAiChatRunner(
+        ObjectProvider<ChatModel> chatModels,
+        SpringAiMarketTools marketTools,
+        AiMetrics aiMetrics,
+        String model,
+        int maxOutputTokens
+    ) {
+        this(chatModels, marketTools, aiMetrics, null, null, model, maxOutputTokens);
+    }
+
+    public SpringAiChatRunner(
+        ObjectProvider<ChatModel> chatModels,
+        SpringAiMarketTools marketTools,
+        McpClientToolGateway mcpClientToolGateway,
+        AiMetrics aiMetrics,
+        String model,
+        int maxOutputTokens
+    ) {
+        this(chatModels, marketTools, aiMetrics, null, mcpClientToolGateway, model, maxOutputTokens);
+    }
+
+    private SpringAiChatRunner(
+        ObjectProvider<ChatModel> chatModels,
+        SpringAiMarketTools marketTools,
+        AiMetrics aiMetrics,
+        ObjectProvider<McpClientToolGateway> mcpGatewayProvider,
+        McpClientToolGateway explicitGateway,
+        String model,
+        int maxOutputTokens
+    ) {
+        this.chatModels = chatModels;
+        this.marketTools = marketTools;
+        this.mcpClientToolGateway = explicitGateway != null
+            ? explicitGateway
+            : (mcpGatewayProvider == null ? null : mcpGatewayProvider.getIfAvailable());
         this.aiMetrics = aiMetrics == null ? AiMetrics.noop() : aiMetrics;
         this.model = model;
         this.maxOutputTokens = maxOutputTokens;
@@ -71,7 +115,7 @@ public class SpringAiChatRunner {
         String model,
         int maxOutputTokens
     ) {
-        this(chatModels, marketTools, AiMetrics.noop(), model, maxOutputTokens);
+        this(chatModels, marketTools, AiMetrics.noop(), null, null, model, maxOutputTokens);
     }
 
     public boolean available() {
@@ -350,19 +394,34 @@ public class SpringAiChatRunner {
     }
 
     private List<ToolCallback> toolCallbacks() {
-        List<ToolCallback> existing = toolCallbacks;
+        List<ToolCallback> builtIn = builtInToolCallbacks();
+        if (mcpClientToolGateway == null || !mcpClientToolGateway.isEnabled()) {
+            return builtIn;
+        }
+        List<ToolCallback> external = mcpClientToolGateway.activeToolCallbacks();
+        if (external == null || external.isEmpty()) {
+            return builtIn;
+        }
+        List<ToolCallback> combined = new ArrayList<>(builtIn.size() + external.size());
+        combined.addAll(builtIn);
+        combined.addAll(external);
+        return List.copyOf(combined);
+    }
+
+    private List<ToolCallback> builtInToolCallbacks() {
+        List<ToolCallback> existing = builtInToolCallbacks;
         if (existing != null) {
             return existing;
         }
         synchronized (this) {
-            if (toolCallbacks == null) {
+            if (builtInToolCallbacks == null) {
                 ToolCallback[] callbacks = MethodToolCallbackProvider.builder()
                     .toolObjects(marketTools)
                     .build()
                     .getToolCallbacks();
-                toolCallbacks = List.copyOf(Arrays.asList(callbacks));
+                builtInToolCallbacks = List.copyOf(Arrays.asList(callbacks));
             }
-            return toolCallbacks;
+            return builtInToolCallbacks;
         }
     }
 

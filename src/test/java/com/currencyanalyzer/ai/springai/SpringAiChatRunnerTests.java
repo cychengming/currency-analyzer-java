@@ -1,6 +1,9 @@
 package com.currencyanalyzer.ai.springai;
 
 import com.currencyanalyzer.ai.chat.AiMetrics;
+import com.currencyanalyzer.ai.mcp.client.McpClientGatewayProperties;
+import com.currencyanalyzer.ai.mcp.client.McpClientToolGateway;
+import com.currencyanalyzer.ai.mcp.client.McpServerEndpoint;
 import com.currencyanalyzer.ai.provider.AiProviderException;
 import com.currencyanalyzer.ai.tools.AssistantTools;
 import com.currencyanalyzer.marketdata.MarketDataService;
@@ -27,6 +30,7 @@ import java.time.Clock;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -654,6 +658,151 @@ class SpringAiChatRunnerTests {
             }
             ChatResponseMetadata metadata = ChatResponseMetadata.builder().id(id).build();
             return new ChatResponse(List.of(new Generation(message)), metadata);
+        }
+    }
+
+    @Test
+    void exposesAndExecutesNamespacedMcpClientGatewayToolsDuringStreamingTurn() {
+        McpClientGatewayProperties props = new McpClientGatewayProperties();
+        props.setEnabled(true);
+        McpClientGatewayProperties.ServerPolicy policy = new McpClientGatewayProperties.ServerPolicy();
+        policy.setEnabled(true);
+        policy.setAllowedTools(List.of("get_macro_calendar"));
+        props.setServers(Map.of("macro", policy));
+
+        McpServerEndpoint endpoint = new McpServerEndpoint() {
+            @Override
+            public String serverName() {
+                return "macro";
+            }
+
+            @Override
+            public String serverImplementation() {
+                return "macro-mcp:1.0";
+            }
+
+            @Override
+            public List<DiscoveredTool> listTools() {
+                return List.of(new DiscoveredTool(
+                    "get_macro_calendar",
+                    "Read upcoming macro releases",
+                    "{\"type\":\"object\",\"properties\":{\"currency\":{\"type\":\"string\"}}}",
+                    true
+                ));
+            }
+
+            @Override
+            public ToolInvocationOutcome callTool(String remoteToolName, Map<String, Object> arguments) {
+                return new ToolInvocationOutcome(false, "{\"event\":\"US CPI\",\"currency\":\"" + arguments.get("currency") + "\"}");
+            }
+        };
+
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        McpClientToolGateway gateway = new McpClientToolGateway(
+            List.of(endpoint), props, new AiMetrics(registry), Clock.systemUTC(), Set.of()
+        );
+        try {
+            MarketDataService marketDataService = mock(MarketDataService.class);
+            AssistantTools tools = new AssistantTools(
+                marketDataService,
+                mock(JdbcTemplate.class),
+                Clock.systemUTC(),
+                60,
+                null
+            );
+            McpCallingChatModel model = new McpCallingChatModel();
+            SpringAiChatRunner runner = new SpringAiChatRunner(
+                provider(model), new SpringAiMarketTools(tools), gateway, new AiMetrics(registry), "deepseek-flash", 400
+            );
+            List<String> events = new ArrayList<>();
+
+            runner.answer("Be brief.", List.of(new SpringAiChatRunner.PriorMessage("user", "Any US CPI release soon?", null)),
+                new SpringAiChatRunner.StreamListener() {
+                    @Override
+                    public void onText(String delta) {
+                        events.add("text:" + delta);
+                    }
+
+                    @Override
+                    public void onReasoning(String delta) {
+                    }
+
+                    @Override
+                    public void onToolStarted(String name) {
+                        events.add("started:" + name);
+                    }
+
+                    @Override
+                    public void onToolFinished(String name, String argumentsJson, String result, int durationMs) {
+                        events.add("finished:" + name + ":" + result);
+                    }
+                },
+                () -> false
+            );
+
+            assertTrue(model.sawMcpToolDefinition);
+            assertTrue(model.toolOutputReturnedToModel.contains("\"source\":\"external_mcp\""));
+            assertTrue(model.toolOutputReturnedToModel.contains("\"untrusted\":true"));
+            assertTrue(model.toolOutputReturnedToModel.contains("US CPI"));
+            assertTrue(events.contains("started:mcp_macro__get_macro_calendar"));
+            assertTrue(events.stream().anyMatch(e -> e.startsWith("finished:mcp_macro__get_macro_calendar:")));
+            assertTrue(events.contains("text:US CPI release is scheduled."));
+
+            // Enabled gateway with 0 active external tools cleanly falls back to built-ins only
+            McpClientToolGateway emptyGateway = new McpClientToolGateway(
+                List.of(), props, new AiMetrics(registry), Clock.systemUTC(), Set.of()
+            );
+            try {
+                SpringAiChatRunner builtInOnlyRunner = new SpringAiChatRunner(
+                    provider(new ScriptedChatModel()), new SpringAiMarketTools(tools), emptyGateway, new AiMetrics(registry), "deepseek-flash", 200
+                );
+                assertTrue(builtInOnlyRunner.available());
+            } finally {
+                emptyGateway.shutdown();
+            }
+        } finally {
+            gateway.shutdown();
+        }
+    }
+
+    private static final class McpCallingChatModel implements ChatModel {
+        private int calls;
+        private boolean sawMcpToolDefinition;
+        private String toolOutputReturnedToModel = "";
+
+        @Override
+        public ChatResponse call(Prompt prompt) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public Flux<ChatResponse> stream(Prompt prompt) {
+            calls++;
+            if (calls == 1) {
+                DeepSeekChatOptions options = (DeepSeekChatOptions) prompt.getOptions();
+                sawMcpToolDefinition = options.getToolCallbacks().stream()
+                    .anyMatch(cb -> "mcp_macro__get_macro_calendar".equals(cb.getToolDefinition().name()));
+                DeepSeekAssistantMessage toolCall = DeepSeekAssistantMessage.builder()
+                    .content("")
+                    .toolCalls(List.of(new AssistantMessage.ToolCall(
+                        "call-mcp-1",
+                        "function",
+                        "mcp_macro__get_macro_calendar",
+                        "{\"currency\":\"USD\"}"
+                    )))
+                    .build();
+                return Flux.just(new ChatResponse(List.of(new Generation(toolCall))));
+            }
+            toolOutputReturnedToModel = prompt.getInstructions().getLast().toString();
+            DeepSeekAssistantMessage answer = DeepSeekAssistantMessage.builder()
+                .content("US CPI release is scheduled.")
+                .build();
+            return Flux.just(new ChatResponse(List.of(new Generation(answer))));
+        }
+
+        @Override
+        public ChatOptions getDefaultOptions() {
+            return DeepSeekChatOptions.builder().model("deepseek-flash").build();
         }
     }
 }

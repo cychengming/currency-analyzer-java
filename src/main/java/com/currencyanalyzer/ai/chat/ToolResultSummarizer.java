@@ -28,7 +28,11 @@ public final class ToolResultSummarizer {
         "count",
         "point_count",
         "unread_count",
-        "exceeds_daily_risk_limit"
+        "exceeds_daily_risk_limit",
+        "source",
+        "server",
+        "untrusted",
+        "truncated"
     );
 
     private ToolResultSummarizer() {
