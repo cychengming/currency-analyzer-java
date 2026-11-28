@@ -29,18 +29,18 @@ public final class ToolActivity {
         CURRENT.remove();
     }
 
-    static void started(String name) {
+    public static void started(String name) {
         started(name, "{}");
     }
 
-    static void started(String name, String argumentsJson) {
+    public static void started(String name, String argumentsJson) {
         Listener listener = CURRENT.get();
         if (listener != null) {
             listener.started(name, argumentsJson);
         }
     }
 
-    static void finished(String name, String argumentsJson, String result, int durationMs) {
+    public static void finished(String name, String argumentsJson, String result, int durationMs) {
         Listener listener = CURRENT.get();
         if (listener != null) {
             listener.finished(name, argumentsJson, result, durationMs);

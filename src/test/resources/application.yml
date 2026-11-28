@@ -11,6 +11,11 @@ spring:
     model:
       chat: none
       embedding: none
+    mcp:
+      client:
+        enabled: false
+        toolcallback:
+          enabled: false
 
 app:
   market:
@@ -20,6 +25,9 @@ app:
       api-key: ""
     knowledge:
       retrieval: keyword
+    mcp:
+      client:
+        enabled: false
   storage:
     provider: local
     local-directory: ${java.io.tmpdir}/currency-analyzer-test-storage

@@ -120,9 +120,11 @@ Every candidate must pass the 4-step workflow codified in [SKILL.md](file:///c:/
 - **Human-in-the-Loop Confirmation (`A5`):** Server-persisted confirmation tokens with UI Confirm/Cancel controls in `static/ai-chat.js` for all state-mutating AI actions (alert rules, paper-trade logging, post-mortem saves).
 - **Lean AI Tools:** Add `inspect_master_pipeline` and `get_my_risk_and_open_trades` to `AssistantTools` / `SpringAiMarketTools`.
 
-### Milestone 4 — Spring AI `/mcp` Server & Automated Master Arena Research
+### Milestone 4 — Spring AI `/mcp` Server & Enterprise MCP Ecosystem
 
-- **Spring AI MCP Server (`com.currencyanalyzer.mcp`):**
+- **Spring AI MCP Client Gateway *(Implemented on `feat/enterprise-mcp-client-gateway`)*:**
+  - Added `spring-ai-starter-mcp-client` (`SYNC` + Streamable HTTP/SSE) behind a fail-closed `McpClientToolGateway` (`com.currencyanalyzer.ai.mcp.client`) with explicit `allowed-tools`, `mcp_<server>__<tool>` namespacing, read-only default enforcement, per-server `Semaphore` bulkhead, sliding circuit breaker, bounded timeout, OWASP LLM01 untrusted JSON wrapping, Prometheus metrics, and admin inspection at `/api/ai/mcp/servers`.
+- **Spring AI MCP Server (`com.currencyanalyzer.mcp` — AI Assistant PR 4):**
   - Add `spring-ai-starter-mcp-server-webmvc` exposing `/mcp` (Streamable HTTP / SSE) so external agents (Antigravity, Claude Desktop, research notebooks) invoke our deterministic 5-stage engine, OHLC/policy-rate store, `trade_journal` risk summary, and Phase 1 RAG Strategy Cards directly.
   - **Security & `WebSecurityConfig` Invariants:** Never mark `/mcp/**` as `permitAll()` and never call global `csrf.disable()`. Add `user_api_tokens` (Flyway `V11+`, SHA-256 hashed tokens, `mcp:read`/`mcp:write` scopes, expiry, managed in `Settings`) behind a dedicated `@Order` stateless Bearer filter chain with `.csrf(csrf -> csrf.ignoringRequestMatchers("/mcp/**"))` and `@SuppressWarnings("java:S4502")`, validating `ACTIVE` user status and `UserRole` (`ADMIN`, `MEMBER`, `VIEWER`).
 - **Automated Research Loop:** External agents running `.agents/skills/distill-master-module` drive `/mcp` to run walk-forward + crisis ablations on candidate Stage 2/3 modules and generate 1-page Vetted Strategy Cards for `knowledge/strategies/`.

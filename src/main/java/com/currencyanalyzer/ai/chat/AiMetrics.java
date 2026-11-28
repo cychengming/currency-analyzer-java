@@ -154,6 +154,24 @@ public class AiMetrics {
             .record(Math.max(0L, durationNanos), TimeUnit.NANOSECONDS);
     }
 
+    public void recordMcpClientCall(String server, String tool, String status, int durationMs) {
+        String safeServer = sanitizeTag(server, "unknown");
+        String safeTool = sanitizeTag(tool, "unknown");
+        String safeStatus = sanitizeTag(status, "unknown");
+        Counter.builder("currency_analyzer_mcp_client_calls_total")
+            .tag("server", safeServer)
+            .tag("tool", safeTool)
+            .tag(TAG_STATUS, safeStatus)
+            .register(registry)
+            .increment();
+        Timer.builder("currency_analyzer_mcp_client_duration_seconds")
+            .tag("server", safeServer)
+            .tag("tool", safeTool)
+            .tag(TAG_STATUS, safeStatus)
+            .register(registry)
+            .record(Math.max(0, durationMs), TimeUnit.MILLISECONDS);
+    }
+
     private static String sanitizeTag(String value, String fallback) {
         if (value == null || value.isBlank()) {
             return fallback;

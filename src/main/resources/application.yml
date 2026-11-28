@@ -5,6 +5,16 @@ spring:
     model:
       chat: none
       embedding: none
+    mcp:
+      client:
+        enabled: ${MCP_CLIENT_ENABLED:false}
+        name: currency-analyzer-java
+        version: 1.0.0
+        type: SYNC
+        initialized: true
+        request-timeout: ${MCP_CLIENT_REQUEST_TIMEOUT:15s}
+        toolcallback:
+          enabled: false
   datasource:
     url: ${DATABASE_URL:jdbc:postgresql://localhost:5434/currency_analyzer}
     username: ${DATABASE_USERNAME:currency}
@@ -90,6 +100,15 @@ app:
       embedding-model-uri: ${AI_EMBEDDING_MODEL_URI:https://huggingface.co/Xenova/paraphrase-multilingual-MiniLM-L12-v2/resolve/main/onnx/model_quantized.onnx}
       embedding-tokenizer-uri: ${AI_EMBEDDING_TOKENIZER_URI:https://huggingface.co/Xenova/paraphrase-multilingual-MiniLM-L12-v2/resolve/main/tokenizer.json}
       embedding-cache-directory: ${AI_EMBEDDING_CACHE:${user.home}/.cache/currency-analyzer/embeddings}
+    mcp:
+      client:
+        enabled: ${APP_MCP_CLIENT_ENABLED:false}
+        default-timeout-seconds: ${APP_MCP_CLIENT_TIMEOUT_SECONDS:10}
+        default-max-concurrent-calls: ${APP_MCP_CLIENT_MAX_CONCURRENT:4}
+        default-max-result-chars: ${APP_MCP_CLIENT_MAX_RESULT_CHARS:4000}
+        circuit-breaker-failure-threshold: ${APP_MCP_CLIENT_CB_FAILURE_THRESHOLD:5}
+        circuit-breaker-open-seconds: ${APP_MCP_CLIENT_CB_OPEN_SECONDS:30}
+        tool-list-cache-ttl-seconds: ${APP_MCP_CLIENT_TOOL_CACHE_TTL_SECONDS:300}
   market:
     pairs: ${MARKET_PAIRS:}
     # Matches the dashboard refresh interval. Concurrent viewers share one upstream fetch.
