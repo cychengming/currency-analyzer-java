@@ -747,6 +747,19 @@ class SpringAiChatRunnerTests {
             assertTrue(events.contains("started:mcp_macro__get_macro_calendar"));
             assertTrue(events.stream().anyMatch(e -> e.startsWith("finished:mcp_macro__get_macro_calendar:")));
             assertTrue(events.contains("text:US CPI release is scheduled."));
+
+            // Enabled gateway with 0 active external tools cleanly falls back to built-ins only
+            McpClientToolGateway emptyGateway = new McpClientToolGateway(
+                List.of(), props, new AiMetrics(registry), Clock.systemUTC(), Set.of()
+            );
+            try {
+                SpringAiChatRunner builtInOnlyRunner = new SpringAiChatRunner(
+                    provider(new ScriptedChatModel()), new SpringAiMarketTools(tools), emptyGateway, new AiMetrics(registry), "deepseek-flash", 200
+                );
+                assertTrue(builtInOnlyRunner.available());
+            } finally {
+                emptyGateway.shutdown();
+            }
         } finally {
             gateway.shutdown();
         }

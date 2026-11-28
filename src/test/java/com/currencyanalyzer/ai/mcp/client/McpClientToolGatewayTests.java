@@ -271,6 +271,36 @@ class McpClientToolGatewayTests {
             assertTrue(timeoutErr.path("error").asText().contains("timed out"));
             assertEquals("OPEN", gateway.serverStatuses().getFirst().circuitState());
 
+            // Empty / null outcomes, plain text, runtime exceptions, and disabled server status
+            endpoint.customCall = null;
+            endpoint.nextOutcome.set(new ToolInvocationOutcome(false, "plain summary line"));
+            ToolCallback queryPlain = query;
+            McpClientToolGateway plainGateway = new McpClientToolGateway(List.of(endpoint), props, AiMetrics.noop(), FIXED_CLOCK, Set.of());
+            try {
+                ToolCallback cb = callbackNamed(plainGateway.activeToolCallbacks(), "mcp_slow-mcp__query");
+                JsonNode plainEnv = OBJECT_MAPPER.readTree(cb.call(""));
+                assertEquals("plain summary line", plainEnv.path("payload").asText());
+
+                endpoint.nextOutcome.set(null);
+                JsonNode nullOutcomeEnv = OBJECT_MAPPER.readTree(cb.call(null));
+                assertEquals("", nullOutcomeEnv.path("payload").asText());
+
+                endpoint.customCall = (n, a) -> {
+                    throw new IllegalStateException("Boom!");
+                };
+                JsonNode exEnv = OBJECT_MAPPER.readTree(cb.call("{}"));
+                assertEquals("Boom!", exEnv.path("error").asText());
+            } finally {
+                plainGateway.shutdown();
+            }
+
+            assertFalse(McpClientToolGateway.looksLikeWriteTool(" "));
+            assertTrue(McpClientToolGateway.buildNamespacedToolName("server/with spaces", "very_long_tool_name_exceeding_sixty_four_characters_total_length_here").length() <= 64);
+
+            McpClientToolGateway emptyGateway = new McpClientToolGateway(List.of(), props, AiMetrics.noop(), FIXED_CLOCK, Set.of());
+            assertTrue(emptyGateway.serverStatuses().isEmpty());
+            emptyGateway.shutdown();
+
             // Fast-fail while OPEN without calling endpoint again
             int callsBeforeFastFail = endpoint.callCount.get();
             JsonNode openErr = OBJECT_MAPPER.readTree(query.call("{}"));
